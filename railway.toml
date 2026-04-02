@@ -1,0 +1,7 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Midnight AEST = 14:00 UTC (adjust to 13:00 UTC during AEDT)
+cronSchedule = "0 14 * * *"
