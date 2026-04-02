@@ -45,7 +45,6 @@ def _trend_arrow(pct_change: float, invert: bool = False) -> str:
 
 def _format_ad_block(report: AdFatigueReport) -> str:
     """Format a single ad's fatigue report for Slack."""
-    emoji = ALERT_EMOJI[report.alert_level]
     role = ROLE_LABEL.get(report.role, report.role)
 
     # Find key signal changes for display
@@ -57,10 +56,47 @@ def _format_ad_block(report: AdFatigueReport) -> str:
 
     lines = [
         f"*{report.ad_name}*",
+        f"Campaign: `{report.campaign_name}`",
         f"Role: {role} │ Score: {report.fatigue_score}/100",
-        f"Spend: {_format_currency(report.avg_daily_spend)}/day ({report.spend_share_pct:.1f}% of total) │ Freq: {report.current_frequency:.1f} {_trend_arrow(freq_signal.pct_change if freq_signal else 0)}",
-        f"CTR: {report.current_ctr:.2f}% {_trend_arrow(ctr_signal.pct_change if ctr_signal else 0, invert=True)} │ CPC: {_format_currency(report.current_cpc)} {_trend_arrow(cpc_signal.pct_change if cpc_signal else 0)} │ ROAS: {report.current_roas:.1f}x {_trend_arrow(roas_signal.pct_change if roas_signal else 0, invert=True)}",
+        f"Spend: {_format_currency(report.avg_daily_spend)}/day ({report.spend_share_pct:.1f}% of total) │ 7d total: {_format_currency(report.total_spend)}",
+        f"CTR: {report.current_ctr:.2f}% {_trend_arrow(ctr_signal.pct_change if ctr_signal else 0, invert=True)} │ CPC: {_format_currency(report.current_cpc)} {_trend_arrow(cpc_signal.pct_change if cpc_signal else 0)} │ CPM: {_format_currency(report.current_cpm)} {_trend_arrow(cpm_signal.pct_change if cpm_signal else 0)}",
+        f"ROAS: {report.current_roas:.1f}x {_trend_arrow(roas_signal.pct_change if roas_signal else 0, invert=True)} │ Freq: {report.current_frequency:.1f} {_trend_arrow(freq_signal.pct_change if freq_signal else 0)}",
         f"_{report.summary}_",
+    ]
+
+    return "\n".join(lines)
+
+
+def _format_watch_block(report: AdFatigueReport) -> str:
+    """Format a Watch ad with full signal breakdown explaining WHY it's flagged."""
+    ctr_signal = next((s for s in report.signals if s.name == "ctr_decay"), None)
+    cpc_signal = next((s for s in report.signals if s.name == "cpc_inflation"), None)
+    cpm_signal = next((s for s in report.signals if s.name == "cpm_inflation"), None)
+    freq_signal = next((s for s in report.signals if s.name == "frequency_climb"), None)
+    roas_signal = next((s for s in report.signals if s.name == "roas_decay"), None)
+    share_signal = next((s for s in report.signals if s.name == "spend_share_decline"), None)
+
+    # Build the "why" — list signals that are actually moving
+    reasons = []
+    for signal, label, invert in [
+        (ctr_signal, "CTR", True),
+        (cpc_signal, "CPC", False),
+        (cpm_signal, "CPM", False),
+        (freq_signal, "Frequency", False),
+        (roas_signal, "ROAS", True),
+        (share_signal, "Spend share", True),
+    ]:
+        if signal and signal.raw_score > 10:
+            direction = "down" if (signal.pct_change > 0) == invert else "up"
+            reasons.append(f"{label} {direction} {abs(signal.pct_change):.0f}%")
+
+    why_text = " │ ".join(reasons) if reasons else "Mild shifts across multiple signals"
+
+    lines = [
+        f"• *{report.ad_name}*",
+        f"  Campaign: `{report.campaign_name}` │ Score: {report.fatigue_score}/100",
+        f"  Spend: {_format_currency(report.avg_daily_spend)}/day │ ROAS: {report.current_roas:.1f}x │ CTR: {report.current_ctr:.2f}% │ CPC: {_format_currency(report.current_cpc)} │ Freq: {report.current_frequency:.1f}",
+        f"  _Why:_ {why_text}",
     ]
 
     return "\n".join(lines)
@@ -77,9 +113,10 @@ def build_slack_message(reports: list[AdFatigueReport]) -> dict:
     healthy = [r for r in reports if r.alert_level == "healthy"]
 
     # Totals
-    total_spend = sum(r.avg_daily_spend for r in reports)
+    total_daily_spend = sum(r.avg_daily_spend for r in reports)
+    total_7d_spend = sum(r.total_spend for r in reports)
     total_revenue = sum(r.current_roas * r.avg_daily_spend for r in reports)
-    blended_roas = total_revenue / total_spend if total_spend > 0 else 0
+    blended_roas = total_revenue / total_daily_spend if total_daily_spend > 0 else 0
 
     blocks = []
 
@@ -90,17 +127,23 @@ def build_slack_message(reports: list[AdFatigueReport]) -> dict:
     })
 
     # Overview
-    overview_parts = [
-        f"*{len(reports)}* active ads │ ",
-        f"Avg daily spend: *{_format_currency(total_spend)}* │ ",
+    overview_lines = [
+        f"*{len(reports)}* active ads │ Avg daily spend: *{_format_currency(total_daily_spend)}* │ 7d total: *{_format_currency(total_7d_spend)}*",
         f"Blended ROAS: *{blended_roas:.1f}x*",
     ]
+    status_parts = []
     if critical:
-        overview_parts.append(f" │ 🔴 *{len(critical)} critical*")
+        status_parts.append(f"🔴 {len(critical)} critical")
+    if warning:
+        status_parts.append(f"🟡 {len(warning)} warning")
+    if watch:
+        status_parts.append(f"🔵 {len(watch)} watch")
+    status_parts.append(f"✅ {len(healthy)} healthy")
+    overview_lines.append(" │ ".join(status_parts))
 
     blocks.append({
         "type": "section",
-        "text": {"type": "mrkdwn", "text": "".join(overview_parts)}
+        "text": {"type": "mrkdwn", "text": "\n".join(overview_lines)}
     })
 
     blocks.append({"type": "divider"})
@@ -131,20 +174,27 @@ def build_slack_message(reports: list[AdFatigueReport]) -> dict:
             })
         blocks.append({"type": "divider"})
 
-    # Watch - collapsed summary
+    # Watch - full breakdown per ad
     if watch:
-        watch_names = ", ".join(r.ad_name[:30] for r in watch[:5])
-        suffix = f" +{len(watch) - 5} more" if len(watch) > 5 else ""
         blocks.append({
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"🔵 *WATCH — {len(watch)} ads:* {watch_names}{suffix}"}
+            "text": {"type": "mrkdwn", "text": f"🔵 *WATCH — {len(watch)} ad{'s' if len(watch) != 1 else ''}*"}
         })
+        for r in watch:
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": _format_watch_block(r)}
+            })
+        blocks.append({"type": "divider"})
 
-    # Healthy - just a count
+    # Healthy - count with spend context
     if healthy:
+        healthy_spend = sum(r.avg_daily_spend for r in healthy)
+        healthy_revenue = sum(r.current_roas * r.avg_daily_spend for r in healthy)
+        healthy_roas = healthy_revenue / healthy_spend if healthy_spend > 0 else 0
         blocks.append({
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"✅ *{len(healthy)} ads performing within baseline*"}
+            "text": {"type": "mrkdwn", "text": f"✅ *{len(healthy)} ads performing within baseline* │ {_format_currency(healthy_spend)}/day │ ROAS: {healthy_roas:.1f}x"}
         })
 
     # No fatigue detected
