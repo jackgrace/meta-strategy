@@ -78,7 +78,9 @@ def fetch_ad_insights(config: Config) -> list[AdDayMetrics]:
     Returns a flat list of AdDayMetrics (one per ad per day).
     """
     end_date = datetime.now().date() - timedelta(days=1)  # Yesterday
-    start_date = end_date - timedelta(days=config.lookback_days - 1)
+    # Fetch enough data for the long window (21d) — short window analysis
+    # will use only the last 7 days from this same dataset
+    start_date = end_date - timedelta(days=config.long_lookback_days - 1)
 
     url = f"{API_BASE}/{config.meta_ad_account_id}/insights"
     params = {

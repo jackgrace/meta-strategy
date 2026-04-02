@@ -11,10 +11,17 @@ class Config:
     # Slack
     slack_webhook_url: str = ""
 
-    # Analysis
-    lookback_days: int = 7  # Total window to pull data
+    # Analysis — short window (acute fatigue)
+    lookback_days: int = 7  # Total short window
     baseline_days: int = 4  # First N days = baseline
     recent_days: int = 3    # Last N days = recent performance
+
+    # Analysis — long window (slow-burn fatigue)
+    long_lookback_days: int = 21  # Total long window
+    long_baseline_days: int = 14  # First N days = baseline
+    long_recent_days: int = 7     # Last N days = recent performance
+    long_trend_threshold: int = 25  # Min long-window score to flag slow burn
+
     min_spend_threshold: float = 5.0  # Ignore ads spending less than $X/day avg
     min_impressions: int = 100  # Minimum impressions to evaluate
 

@@ -31,6 +31,15 @@ class SignalDetail:
 
 
 @dataclass
+class LongTrendDetail:
+    """Long-window (21d) trend analysis for slow-burn fatigue detection."""
+    score: int  # 0-100, same scale as short window
+    signals: list[SignalDetail] = field(default_factory=list)
+    summary: str = ""  # e.g. "Slow CTR decline over 3 weeks"
+    days_available: int = 0  # How many days of data we actually had
+
+
+@dataclass
 class AdFatigueReport:
     """Complete fatigue analysis for one ad."""
     ad_id: str
@@ -55,6 +64,10 @@ class AdFatigueReport:
     # Signals breakdown
     signals: list[SignalDetail] = field(default_factory=list)
     summary: str = ""  # Human-readable summary of what's happening
+
+    # Long-window trend (only populated when short window looks healthy
+    # but long window reveals slow-burn fatigue)
+    long_trend: LongTrendDetail | None = None
 
 
 def _safe_pct_change(baseline: float, recent: float) -> float:
@@ -149,18 +162,112 @@ def _generate_summary(signals: list[SignalDetail], role: str, fatigue_score: int
         return f"Declining performance — {', '.join(parts)}"
 
 
+def _avg_metrics(data: list[AdDayMetrics], attr: str) -> float:
+    """Average a metric across a list of daily data points."""
+    vals = [getattr(d, attr) for d in data]
+    return sum(vals) / len(vals) if vals else 0
+
+
+def _score_window(
+    baseline_days: list[AdDayMetrics],
+    recent_days_data: list[AdDayMetrics],
+    weights: dict,
+    total_spend_all: float,
+    total_days: int,
+) -> tuple[int, list[SignalDetail]]:
+    """
+    Score fatigue signals for a given baseline vs recent window.
+    Returns (score, signals).
+    """
+    baseline = {k: _avg_metrics(baseline_days, k) for k in ("ctr", "cpc", "cpm", "frequency", "roas", "spend")}
+    recent = {k: _avg_metrics(recent_days_data, k) for k in ("ctr", "cpc", "cpm", "frequency", "roas", "spend")}
+
+    # Spend share
+    avg_daily_total = total_spend_all / total_days if total_days > 0 else 1
+    baseline_spend_share = baseline["spend"] / avg_daily_total * 100 if avg_daily_total > 0 else 0
+    recent_spend_share = recent["spend"] / avg_daily_total * 100 if avg_daily_total > 0 else 0
+
+    signal_defs = [
+        ("ctr_decay",           "ctr",       True),
+        ("cpc_inflation",       "cpc",       False),
+        ("cpm_inflation",       "cpm",       False),
+        ("frequency_climb",     "frequency", False),
+        ("roas_decay",          "roas",      True),
+    ]
+
+    signals = []
+    for name, metric, invert in signal_defs:
+        change = _safe_pct_change(baseline[metric], recent[metric])
+        score = _signal_to_score(change, invert=invert)
+        stored_change = -change if invert else change
+        signals.append(SignalDetail(
+            name=name,
+            baseline_value=baseline[metric],
+            recent_value=recent[metric],
+            pct_change=stored_change,
+            raw_score=score,
+            weight=weights[name],
+            weighted_score=score * weights[name],
+        ))
+
+    # Spend share decline
+    share_change = _safe_pct_change(baseline_spend_share, recent_spend_share)
+    share_score = _signal_to_score(share_change, invert=True)
+    signals.append(SignalDetail(
+        name="spend_share_decline",
+        baseline_value=baseline_spend_share,
+        recent_value=recent_spend_share,
+        pct_change=-share_change,
+        raw_score=share_score,
+        weight=weights["spend_share_decline"],
+        weighted_score=share_score * weights["spend_share_decline"],
+    ))
+
+    fatigue_score = int(min(100, sum(s.weighted_score for s in signals)))
+    return fatigue_score, signals
+
+
+def _generate_long_trend_summary(signals: list[SignalDetail], score: int) -> str:
+    """Generate summary for slow-burn fatigue detected on the 21-day window."""
+    if score < 25:
+        return ""
+
+    ranked = sorted(signals, key=lambda s: s.weighted_score, reverse=True)
+    top = [s for s in ranked[:3] if s.weighted_score > 2]
+
+    if not top:
+        return "Gradual decline across multiple signals over 3 weeks"
+
+    parts = []
+    for s in top:
+        if s.name == "ctr_decay":
+            parts.append(f"CTR down {abs(s.pct_change):.0f}%")
+        elif s.name == "cpc_inflation":
+            parts.append(f"CPC up {abs(s.pct_change):.0f}%")
+        elif s.name == "cpm_inflation":
+            parts.append(f"CPM up {abs(s.pct_change):.0f}%")
+        elif s.name == "frequency_climb":
+            parts.append(f"freq up {abs(s.pct_change):.0f}%")
+        elif s.name == "roas_decay":
+            parts.append(f"ROAS down {abs(s.pct_change):.0f}%")
+        elif s.name == "spend_share_decline":
+            parts.append("spend share declining")
+
+    return f"Slow burn over 21d — {', '.join(parts)}"
+
+
 def analyze_fatigue(
     all_metrics: list[AdDayMetrics],
     config: Config,
 ) -> list[AdFatigueReport]:
     """
-    Analyze fatigue for all ads.
+    Analyze fatigue for all ads using two windows:
 
-    1. Group metrics by ad
-    2. Split into baseline vs recent windows
-    3. Classify each ad's role
-    4. Score fatigue signals against ad's own baseline
-    5. Weight signals by role
+    Short window (7d): 4d baseline vs 3d recent — catches acute fatigue.
+    Long window (21d): 14d baseline vs 7d recent — catches slow-burn decay.
+
+    The long window only surfaces when the short window looks healthy,
+    so it doesn't double up noise on ads already flagged.
     """
 
     # Group by ad_id
@@ -173,150 +280,51 @@ def analyze_fatigue(
 
     reports = []
 
-    for ad_id, days in ads.items():
+    for ad_id, all_days in ads.items():
         # Sort by date
-        days.sort(key=lambda d: d.date)
+        all_days.sort(key=lambda d: d.date)
 
-        # Need minimum data
-        if len(days) < 3:
+        # Use last 7 days for short window (may have up to 21 days of data)
+        short_days = all_days[-config.lookback_days:]
+
+        # Need minimum data for short window
+        if len(short_days) < 3:
             continue
 
-        total_spend = sum(d.spend for d in days)
-        avg_daily_spend = total_spend / len(days)
+        total_spend = sum(d.spend for d in short_days)
+        avg_daily_spend = total_spend / len(short_days)
 
         # Skip low-spend ads
         if avg_daily_spend < config.min_spend_threshold:
             continue
 
-        # Split into baseline and recent windows
-        split_idx = max(1, len(days) - config.recent_days)
-        baseline_days = days[:split_idx]
-        recent_days_data = days[split_idx:]
+        # Short window: split into baseline and recent
+        short_split = max(1, len(short_days) - config.recent_days)
+        short_baseline = short_days[:short_split]
+        short_recent = short_days[short_split:]
 
-        if not baseline_days or not recent_days_data:
+        if not short_baseline or not short_recent:
             continue
 
-        # Calculate averages for each window
-        def avg(data: list[AdDayMetrics], attr: str) -> float:
-            vals = [getattr(d, attr) for d in data]
-            return sum(vals) / len(vals) if vals else 0
-
-        baseline = {
-            "ctr": avg(baseline_days, "ctr"),
-            "cpc": avg(baseline_days, "cpc"),
-            "cpm": avg(baseline_days, "cpm"),
-            "frequency": avg(baseline_days, "frequency"),
-            "roas": avg(baseline_days, "roas"),
-            "spend": avg(baseline_days, "spend"),
-        }
-
-        recent = {
-            "ctr": avg(recent_days_data, "ctr"),
-            "cpc": avg(recent_days_data, "cpc"),
-            "cpm": avg(recent_days_data, "cpm"),
-            "frequency": avg(recent_days_data, "frequency"),
-            "roas": avg(recent_days_data, "roas"),
-            "spend": avg(recent_days_data, "spend"),
-        }
-
-        # Overall averages for role classification
-        overall_roas = avg(days, "roas")
-        overall_ctr = avg(days, "ctr")
-
-        # Classify role
+        # Role classification uses the short window
+        overall_roas = _avg_metrics(short_days, "roas")
+        overall_ctr = _avg_metrics(short_days, "ctr")
         role = _classify_role(overall_roas, overall_ctr, config)
         weights = config.efficiency_weights if role == "efficiency" else config.engagement_weights
 
-        # Spend share
+        # Spend share (based on short window)
         spend_share = (total_spend / total_spend_all * 100) if total_spend_all > 0 else 0
-        baseline_spend_share = baseline["spend"] / (total_spend_all / len(days)) * 100 if total_spend_all > 0 else 0
-        recent_spend_share = recent["spend"] / (total_spend_all / len(days)) * 100 if total_spend_all > 0 else 0
 
-        # Calculate each fatigue signal
-        signals = []
+        # Score short window
+        fatigue_score, signals = _score_window(
+            short_baseline, short_recent, weights,
+            total_spend_all, len(short_days),
+        )
 
-        # CTR decay (decrease = bad -> invert)
-        ctr_change = _safe_pct_change(baseline["ctr"], recent["ctr"])
-        ctr_score = _signal_to_score(ctr_change, invert=True)
-        signals.append(SignalDetail(
-            name="ctr_decay",
-            baseline_value=baseline["ctr"],
-            recent_value=recent["ctr"],
-            pct_change=-ctr_change,  # Store as negative when declining
-            raw_score=ctr_score,
-            weight=weights["ctr_decay"],
-            weighted_score=ctr_score * weights["ctr_decay"],
-        ))
+        # Recent metrics for display
+        recent_metrics = {k: _avg_metrics(short_recent, k) for k in ("ctr", "cpc", "cpm", "roas", "frequency")}
 
-        # CPC inflation (increase = bad)
-        cpc_change = _safe_pct_change(baseline["cpc"], recent["cpc"])
-        cpc_score = _signal_to_score(cpc_change)
-        signals.append(SignalDetail(
-            name="cpc_inflation",
-            baseline_value=baseline["cpc"],
-            recent_value=recent["cpc"],
-            pct_change=cpc_change,
-            raw_score=cpc_score,
-            weight=weights["cpc_inflation"],
-            weighted_score=cpc_score * weights["cpc_inflation"],
-        ))
-
-        # CPM inflation (increase = bad)
-        cpm_change = _safe_pct_change(baseline["cpm"], recent["cpm"])
-        cpm_score = _signal_to_score(cpm_change)
-        signals.append(SignalDetail(
-            name="cpm_inflation",
-            baseline_value=baseline["cpm"],
-            recent_value=recent["cpm"],
-            pct_change=cpm_change,
-            raw_score=cpm_score,
-            weight=weights["cpm_inflation"],
-            weighted_score=cpm_score * weights["cpm_inflation"],
-        ))
-
-        # Frequency climb (increase = bad)
-        freq_change = _safe_pct_change(baseline["frequency"], recent["frequency"])
-        freq_score = _signal_to_score(freq_change)
-        signals.append(SignalDetail(
-            name="frequency_climb",
-            baseline_value=baseline["frequency"],
-            recent_value=recent["frequency"],
-            pct_change=freq_change,
-            raw_score=freq_score,
-            weight=weights["frequency_climb"],
-            weighted_score=freq_score * weights["frequency_climb"],
-        ))
-
-        # ROAS decay (decrease = bad -> invert)
-        roas_change = _safe_pct_change(baseline["roas"], recent["roas"])
-        roas_score = _signal_to_score(roas_change, invert=True)
-        signals.append(SignalDetail(
-            name="roas_decay",
-            baseline_value=baseline["roas"],
-            recent_value=recent["roas"],
-            pct_change=-roas_change,
-            raw_score=roas_score,
-            weight=weights["roas_decay"],
-            weighted_score=roas_score * weights["roas_decay"],
-        ))
-
-        # Spend share decline (decrease = ASC pulling back -> invert)
-        share_change = _safe_pct_change(baseline_spend_share, recent_spend_share)
-        share_score = _signal_to_score(share_change, invert=True)
-        signals.append(SignalDetail(
-            name="spend_share_decline",
-            baseline_value=baseline_spend_share,
-            recent_value=recent_spend_share,
-            pct_change=-share_change,
-            raw_score=share_score,
-            weight=weights["spend_share_decline"],
-            weighted_score=share_score * weights["spend_share_decline"],
-        ))
-
-        # Total fatigue score
-        fatigue_score = int(min(100, sum(s.weighted_score for s in signals)))
-
-        # Alert level
+        # Alert level from short window
         if fatigue_score >= config.critical_threshold:
             alert_level = "critical"
         elif fatigue_score >= config.warning_threshold:
@@ -328,7 +336,36 @@ def analyze_fatigue(
 
         summary = _generate_summary(signals, role, fatigue_score)
 
-        ad_meta = days[0]  # Use first day for name/campaign info
+        # Long window: only analyze if short window says healthy/watch
+        # (no point double-flagging ads already critical/warning)
+        long_trend = None
+        if alert_level in ("healthy", "watch") and len(all_days) >= 10:
+            long_split = max(1, len(all_days) - config.long_recent_days)
+            long_baseline = all_days[:long_split]
+            long_recent = all_days[long_split:]
+
+            if long_baseline and long_recent:
+                long_score, long_signals = _score_window(
+                    long_baseline, long_recent, weights,
+                    total_spend_all, len(all_days),
+                )
+
+                # Only surface if the long window reveals meaningful decay
+                if long_score >= config.long_trend_threshold:
+                    long_summary = _generate_long_trend_summary(long_signals, long_score)
+                    long_trend = LongTrendDetail(
+                        score=long_score,
+                        signals=long_signals,
+                        summary=long_summary,
+                        days_available=len(all_days),
+                    )
+
+                    # Upgrade healthy -> watch if long trend is significant
+                    if alert_level == "healthy" and long_score >= config.watch_threshold:
+                        alert_level = "watch"
+                        summary = f"Short-term stable, but: {long_summary}"
+
+        ad_meta = all_days[0]
 
         reports.append(AdFatigueReport(
             ad_id=ad_id,
@@ -338,28 +375,31 @@ def analyze_fatigue(
             role=role,
             fatigue_score=fatigue_score,
             alert_level=alert_level,
-            days_active=len(days),
+            days_active=len(all_days),
             avg_daily_spend=avg_daily_spend,
             total_spend=total_spend,
             spend_share_pct=spend_share,
-            current_ctr=recent["ctr"],
-            current_cpc=recent["cpc"],
-            current_cpm=recent["cpm"],
-            current_roas=recent["roas"],
-            current_frequency=recent["frequency"],
+            current_ctr=recent_metrics["ctr"],
+            current_cpc=recent_metrics["cpc"],
+            current_cpm=recent_metrics["cpm"],
+            current_roas=recent_metrics["roas"],
+            current_frequency=recent_metrics["frequency"],
             signals=signals,
             summary=summary,
+            long_trend=long_trend,
         ))
 
     # Sort by fatigue score descending
     reports.sort(key=lambda r: r.fatigue_score, reverse=True)
 
+    long_trend_count = sum(1 for r in reports if r.long_trend)
     logger.info(
         f"Analyzed {len(reports)} ads: "
         f"{sum(1 for r in reports if r.alert_level == 'critical')} critical, "
         f"{sum(1 for r in reports if r.alert_level == 'warning')} warning, "
         f"{sum(1 for r in reports if r.alert_level == 'watch')} watch, "
         f"{sum(1 for r in reports if r.alert_level == 'healthy')} healthy"
+        f"{f', {long_trend_count} with slow-burn trends' if long_trend_count else ''}"
     )
 
     return reports

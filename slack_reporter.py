@@ -64,6 +64,9 @@ def _format_ad_block(report: AdFatigueReport) -> str:
         f"_{report.summary}_",
     ]
 
+    if report.long_trend and report.long_trend.summary:
+        lines.append(f"⚠️ _{report.long_trend.summary}_ (score: {report.long_trend.score}/100)")
+
     return "\n".join(lines)
 
 
@@ -96,8 +99,11 @@ def _format_watch_block(report: AdFatigueReport) -> str:
         f"• *{report.ad_name}*",
         f"  Campaign: `{report.campaign_name}` │ Score: {report.fatigue_score}/100",
         f"  Spend: {_format_currency(report.avg_daily_spend)}/day │ ROAS: {report.current_roas:.1f}x │ CTR: {report.current_ctr:.2f}% │ CPC: {_format_currency(report.current_cpc)} │ Freq: {report.current_frequency:.1f}",
-        f"  _Why:_ {why_text}",
+        f"  _Why (7d):_ {why_text}",
     ]
+
+    if report.long_trend and report.long_trend.summary:
+        lines.append(f"  ⚠️ _21d trend:_ {report.long_trend.summary} (score: {report.long_trend.score}/100)")
 
     return "\n".join(lines)
 
@@ -144,6 +150,12 @@ def build_slack_message(reports: list[AdFatigueReport]) -> dict:
     blocks.append({
         "type": "section",
         "text": {"type": "mrkdwn", "text": "\n".join(overview_lines)}
+    })
+
+    # Timeframe context
+    blocks.append({
+        "type": "context",
+        "elements": [{"type": "mrkdwn", "text": "_Trends compare last 3 days vs prior 4 days (7-day window). Slow-burn trends compare last 7 days vs prior 14 days (21-day window)._"}]
     })
 
     blocks.append({"type": "divider"})
