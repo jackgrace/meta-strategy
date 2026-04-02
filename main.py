@@ -1,6 +1,7 @@
 """
 Meta Ad Fatigue Agent
 Runs daily: pulls ad data -> analyzes fatigue -> sends Slack digest.
+Can also be triggered manually via HTTP endpoint or Slack slash command.
 """
 
 import sys
@@ -19,29 +20,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def main():
+def run_check() -> dict:
+    """
+    Run the full fatigue check pipeline.
+    Returns a summary dict (useful for HTTP responses).
+    """
     logger.info("=== Meta Ad Fatigue Agent starting ===")
 
-    # Load config from environment
-    try:
-        config = Config.from_env()
-    except KeyError as e:
-        logger.error(f"Missing required environment variable: {e}")
-        sys.exit(1)
+    config = Config.from_env()
 
     # Step 1: Fetch ad insights from Meta
     logger.info("Fetching ad insights from Meta Marketing API...")
-    try:
-        metrics = fetch_ad_insights(config)
-    except Exception as e:
-        logger.error(f"Failed to fetch Meta data: {e}")
-        sys.exit(1)
+    metrics = fetch_ad_insights(config)
 
     if not metrics:
         logger.warning("No ad data returned from Meta API — nothing to analyze")
-        # Still send a Slack message so you know it ran
         send_slack_report([], config)
-        return
+        return {"status": "ok", "ads_analyzed": 0, "message": "No ad data returned"}
 
     # Step 2: Analyze fatigue
     logger.info(f"Analyzing {len(metrics)} data points...")
@@ -51,15 +46,37 @@ def main():
     logger.info("Sending Slack report...")
     success = send_slack_report(reports, config)
 
+    critical = sum(1 for r in reports if r.alert_level == "critical")
+    warning = sum(1 for r in reports if r.alert_level == "warning")
+
     if success:
-        critical = sum(1 for r in reports if r.alert_level == "critical")
-        warning = sum(1 for r in reports if r.alert_level == "warning")
         logger.info(
             f"=== Complete: {len(reports)} ads analyzed, "
             f"{critical} critical, {warning} warning ==="
         )
     else:
         logger.error("Failed to send Slack report")
+
+    return {
+        "status": "ok" if success else "error",
+        "ads_analyzed": len(reports),
+        "critical": critical,
+        "warning": warning,
+        "slack_sent": success,
+    }
+
+
+def main():
+    try:
+        result = run_check()
+    except KeyError as e:
+        logger.error(f"Missing required environment variable: {e}")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        sys.exit(1)
+
+    if result.get("status") == "error":
         sys.exit(1)
 
 

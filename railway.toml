@@ -3,5 +3,7 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# Midnight AEST = 14:00 UTC (adjust to 13:00 UTC during AEDT)
-cronSchedule = "0 14 * * *"
+# Web service — daily cron handled internally (midnight AEST)
+# Manual triggers via /run or Slack slash command
+healthcheckPath = "/health"
+healthcheckTimeout = 10
