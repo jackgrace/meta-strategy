@@ -90,7 +90,7 @@ def fetch_ad_insights(config: Config) -> list[AdDayMetrics]:
         "time_range": f'{{"since":"{start_date}","until":"{end_date}"}}',
         "time_increment": 1,  # Daily breakdown
         "limit": 500,
-        "filtering": '[{"field":"ad.effective_status","operator":"IN","value":["ACTIVE"]}]',
+        "filtering": '[{"field":"ad.effective_status","operator":"IN","value":["ACTIVE","PAUSED","IN_REVIEW","WITH_ISSUES"]}]',
     }
 
     all_metrics = []

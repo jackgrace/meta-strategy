@@ -279,6 +279,8 @@ def analyze_fatigue(
     total_spend_all = sum(m.spend for m in all_metrics)
 
     reports = []
+    skipped_low_data = 0
+    skipped_low_spend = 0
 
     for ad_id, all_days in ads.items():
         # Sort by date
@@ -289,6 +291,7 @@ def analyze_fatigue(
 
         # Need minimum data for short window
         if len(short_days) < 3:
+            skipped_low_data += 1
             continue
 
         total_spend = sum(d.spend for d in short_days)
@@ -296,6 +299,7 @@ def analyze_fatigue(
 
         # Skip low-spend ads
         if avg_daily_spend < config.min_spend_threshold:
+            skipped_low_spend += 1
             continue
 
         # Short window: split into baseline and recent
@@ -393,6 +397,10 @@ def analyze_fatigue(
     reports.sort(key=lambda r: r.fatigue_score, reverse=True)
 
     long_trend_count = sum(1 for r in reports if r.long_trend)
+    logger.info(
+        f"Total unique ads from API: {len(ads)} │ "
+        f"Skipped: {skipped_low_data} low data, {skipped_low_spend} low spend (<${config.min_spend_threshold}/day)"
+    )
     logger.info(
         f"Analyzed {len(reports)} ads: "
         f"{sum(1 for r in reports if r.alert_level == 'critical')} critical, "
