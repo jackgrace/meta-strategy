@@ -31,23 +31,28 @@ class Config:
     watch_threshold: int = 30
 
     # Signal weights for EFFICIENCY ads (high ROAS, bottom-funnel role)
+    # CPA is heavily weighted here — rising CPA is the earliest fatigue signal
+    # for bottom-funnel ads because it moves before ROAS (AOV fluctuates)
     efficiency_weights: dict = field(default_factory=lambda: {
-        "ctr_decay": 0.15,
-        "cpc_inflation": 0.10,
-        "cpm_inflation": 0.15,
-        "frequency_climb": 0.20,
-        "roas_decay": 0.30,
-        "spend_share_decline": 0.10,
+        "ctr_decay": 0.10,
+        "cpc_inflation": 0.05,
+        "cpm_inflation": 0.10,
+        "cpa_inflation": 0.20,
+        "frequency_climb": 0.15,
+        "roas_decay": 0.25,
+        "spend_share_decline": 0.15,
     })
 
     # Signal weights for ENGAGEMENT ads (low ROAS but strong CTR/CPC, ASC likes them)
+    # CPA matters less here — these ads often have high CPA by design
     engagement_weights: dict = field(default_factory=lambda: {
-        "ctr_decay": 0.30,
-        "cpc_inflation": 0.20,
+        "ctr_decay": 0.25,
+        "cpc_inflation": 0.15,
         "cpm_inflation": 0.15,
+        "cpa_inflation": 0.05,
         "frequency_climb": 0.25,
         "roas_decay": 0.05,
-        "spend_share_decline": 0.05,
+        "spend_share_decline": 0.10,
     })
 
     # Role classification thresholds

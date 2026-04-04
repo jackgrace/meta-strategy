@@ -31,6 +31,73 @@ class SignalDetail:
 
 
 @dataclass
+class TrendStreak:
+    """Day-over-day trend tracking for a single metric."""
+    metric_name: str  # "roas", "cpa", "cpc", "ctr"
+    direction: str  # "declining", "rising", "stable"
+    consecutive_days: int  # Longest current streak in the bad direction
+    days_bad_of_total: int  # e.g. 5 of 7 days declining
+    total_days: int  # Total days analyzed
+    first_value: float  # Value on first day of window
+    last_value: float  # Value on most recent day
+    pct_change_total: float  # Total change first -> last
+
+
+def _analyze_streak(
+    days: list[AdDayMetrics],
+    attr: str,
+    bad_direction: str,  # "up" or "down" — which direction is bad
+) -> TrendStreak:
+    """
+    Analyze day-over-day streaks for a metric.
+
+    bad_direction="up" means rising values are bad (CPC, CPA, CPM).
+    bad_direction="down" means falling values are bad (ROAS, CTR).
+    """
+    values = [getattr(d, attr) for d in days]
+
+    # Count days moving in the bad direction and track consecutive streak
+    days_bad = 0
+    max_consecutive = 0
+    current_consecutive = 0
+
+    for i in range(1, len(values)):
+        prev, curr = values[i - 1], values[i]
+        if prev == 0 and curr == 0:
+            continue
+
+        is_bad = (curr > prev) if bad_direction == "up" else (curr < prev)
+
+        if is_bad:
+            days_bad += 1
+            current_consecutive += 1
+            max_consecutive = max(max_consecutive, current_consecutive)
+        else:
+            current_consecutive = 0
+
+    # Overall direction
+    first_val = values[0] if values else 0
+    last_val = values[-1] if values else 0
+    total_change = _safe_pct_change(first_val, last_val)
+
+    if bad_direction == "up":
+        direction = "rising" if total_change > 5 else ("declining" if total_change < -5 else "stable")
+    else:
+        direction = "declining" if total_change < -5 else ("rising" if total_change > 5 else "stable")
+
+    return TrendStreak(
+        metric_name=attr,
+        direction=direction,
+        consecutive_days=max_consecutive,
+        days_bad_of_total=days_bad,
+        total_days=len(values) - 1,  # Transitions, not days
+        first_value=first_val,
+        last_value=last_val,
+        pct_change_total=total_change,
+    )
+
+
+@dataclass
 class LongTrendDetail:
     """Long-window (21d) trend analysis for slow-burn fatigue detection."""
     score: int  # 0-100, same scale as short window
@@ -58,12 +125,16 @@ class AdFatigueReport:
     current_ctr: float
     current_cpc: float
     current_cpm: float
+    current_cpa: float
     current_roas: float
     current_frequency: float
 
     # Signals breakdown
     signals: list[SignalDetail] = field(default_factory=list)
     summary: str = ""  # Human-readable summary of what's happening
+
+    # Day-over-day streak tracking for key metrics
+    streaks: list[TrendStreak] = field(default_factory=list)
 
     # Long-window trend (only populated when short window looks healthy
     # but long window reveals slow-burn fatigue)
@@ -145,6 +216,8 @@ def _generate_summary(signals: list[SignalDetail], role: str, fatigue_score: int
             parts.append(f"CPC rising ({abs(s.pct_change):.0f}%)")
         elif s.name == "cpm_inflation":
             parts.append(f"CPM rising ({abs(s.pct_change):.0f}%)")
+        elif s.name == "cpa_inflation":
+            parts.append(f"CPA rising ({abs(s.pct_change):.0f}%)")
         elif s.name == "roas_decay":
             parts.append(f"ROAS declining ({abs(s.pct_change):.0f}%)")
         elif s.name == "spend_share_decline":
@@ -152,7 +225,9 @@ def _generate_summary(signals: list[SignalDetail], role: str, fatigue_score: int
 
     # Detect classic fatigue pattern
     signal_names = {s.name for s in top_signals}
-    if "frequency_climb" in signal_names and "ctr_decay" in signal_names:
+    if "cpa_inflation" in signal_names and "roas_decay" in signal_names:
+        return f"Efficiency eroding — {', '.join(parts)}"
+    elif "frequency_climb" in signal_names and "ctr_decay" in signal_names:
         return f"Classic fatigue — {', '.join(parts)}"
     elif "cpm_inflation" in signal_names and "frequency_climb" in signal_names:
         return f"Audience saturation — {', '.join(parts)}"
@@ -179,8 +254,8 @@ def _score_window(
     Score fatigue signals for a given baseline vs recent window.
     Returns (score, signals).
     """
-    baseline = {k: _avg_metrics(baseline_days, k) for k in ("ctr", "cpc", "cpm", "frequency", "roas", "spend")}
-    recent = {k: _avg_metrics(recent_days_data, k) for k in ("ctr", "cpc", "cpm", "frequency", "roas", "spend")}
+    baseline = {k: _avg_metrics(baseline_days, k) for k in ("ctr", "cpc", "cpm", "cpa", "frequency", "roas", "spend")}
+    recent = {k: _avg_metrics(recent_days_data, k) for k in ("ctr", "cpc", "cpm", "cpa", "frequency", "roas", "spend")}
 
     # Spend share
     avg_daily_total = total_spend_all / total_days if total_days > 0 else 1
@@ -191,6 +266,7 @@ def _score_window(
         ("ctr_decay",           "ctr",       True),
         ("cpc_inflation",       "cpc",       False),
         ("cpm_inflation",       "cpm",       False),
+        ("cpa_inflation",       "cpa",       False),
         ("frequency_climb",     "frequency", False),
         ("roas_decay",          "roas",      True),
     ]
@@ -246,6 +322,8 @@ def _generate_long_trend_summary(signals: list[SignalDetail], score: int) -> str
             parts.append(f"CPC up {abs(s.pct_change):.0f}%")
         elif s.name == "cpm_inflation":
             parts.append(f"CPM up {abs(s.pct_change):.0f}%")
+        elif s.name == "cpa_inflation":
+            parts.append(f"CPA up {abs(s.pct_change):.0f}%")
         elif s.name == "frequency_climb":
             parts.append(f"freq up {abs(s.pct_change):.0f}%")
         elif s.name == "roas_decay":
@@ -326,7 +404,7 @@ def analyze_fatigue(
         )
 
         # Recent metrics for display
-        recent_metrics = {k: _avg_metrics(short_recent, k) for k in ("ctr", "cpc", "cpm", "roas", "frequency")}
+        recent_metrics = {k: _avg_metrics(short_recent, k) for k in ("ctr", "cpc", "cpm", "cpa", "roas", "frequency")}
 
         # Alert level from short window
         if fatigue_score >= config.critical_threshold:
@@ -369,6 +447,14 @@ def analyze_fatigue(
                         alert_level = "watch"
                         summary = f"Short-term stable, but: {long_summary}"
 
+        # Day-over-day streak detection on the short window
+        streaks = [
+            _analyze_streak(short_days, "roas", bad_direction="down"),
+            _analyze_streak(short_days, "cpa", bad_direction="up"),
+            _analyze_streak(short_days, "cpc", bad_direction="up"),
+            _analyze_streak(short_days, "ctr", bad_direction="down"),
+        ]
+
         ad_meta = all_days[0]
 
         reports.append(AdFatigueReport(
@@ -386,10 +472,12 @@ def analyze_fatigue(
             current_ctr=recent_metrics["ctr"],
             current_cpc=recent_metrics["cpc"],
             current_cpm=recent_metrics["cpm"],
+            current_cpa=recent_metrics["cpa"],
             current_roas=recent_metrics["roas"],
             current_frequency=recent_metrics["frequency"],
             signals=signals,
             summary=summary,
+            streaks=streaks,
             long_trend=long_trend,
         ))
 

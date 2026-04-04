@@ -52,6 +52,7 @@ class AdDayMetrics:
     purchases: int
     revenue: float
     roas: float
+    cpa: float  # Cost per purchase (spend / purchases)
 
 
 def _extract_purchases(actions: list | None) -> int:
@@ -131,6 +132,7 @@ def fetch_ad_insights(config: Config) -> list[AdDayMetrics]:
                 purchases=purchases,
                 revenue=revenue,
                 roas=revenue / spend if spend > 0 else 0,
+                cpa=spend / purchases if purchases > 0 else 0,
             )
             all_metrics.append(metric)
 

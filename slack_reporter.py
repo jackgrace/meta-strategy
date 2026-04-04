@@ -43,6 +43,26 @@ def _trend_arrow(pct_change: float, invert: bool = False) -> str:
     return f"{arrow}{abs(pct_change):.0f}%"
 
 
+def _format_streak_line(report: AdFatigueReport) -> str | None:
+    """Format streak info for key metrics. Returns None if nothing notable."""
+    notable = []
+    for streak in report.streaks:
+        # Only show if there's a real trend (3+ consecutive days or majority of days)
+        if streak.consecutive_days >= 3 or (streak.days_bad_of_total >= 4 and streak.total_days >= 5):
+            label = streak.metric_name.upper()
+            first = _format_currency(streak.first_value) if streak.metric_name in ("cpa", "cpc") else f"{streak.first_value:.1f}{'x' if streak.metric_name == 'roas' else '%'}"
+            last = _format_currency(streak.last_value) if streak.metric_name in ("cpa", "cpc") else f"{streak.last_value:.1f}{'x' if streak.metric_name == 'roas' else '%'}"
+
+            if streak.consecutive_days >= 3:
+                notable.append(f"{label} {streak.direction} {streak.consecutive_days} consecutive days ({first} → {last})")
+            else:
+                notable.append(f"{label} {streak.direction} {streak.days_bad_of_total} of {streak.total_days} days ({first} → {last})")
+
+    if not notable:
+        return None
+    return "Trends: " + " │ ".join(notable)
+
+
 def _format_ad_block(report: AdFatigueReport) -> str:
     """Format a single ad's fatigue report for Slack."""
     role = ROLE_LABEL.get(report.role, report.role)
@@ -51,8 +71,11 @@ def _format_ad_block(report: AdFatigueReport) -> str:
     ctr_signal = next((s for s in report.signals if s.name == "ctr_decay"), None)
     cpc_signal = next((s for s in report.signals if s.name == "cpc_inflation"), None)
     cpm_signal = next((s for s in report.signals if s.name == "cpm_inflation"), None)
+    cpa_signal = next((s for s in report.signals if s.name == "cpa_inflation"), None)
     freq_signal = next((s for s in report.signals if s.name == "frequency_climb"), None)
     roas_signal = next((s for s in report.signals if s.name == "roas_decay"), None)
+
+    cpa_display = f"CPA: {_format_currency(report.current_cpa)} {_trend_arrow(cpa_signal.pct_change if cpa_signal else 0)}" if report.current_cpa > 0 else "CPA: n/a"
 
     lines = [
         f"*{report.ad_name}*",
@@ -60,9 +83,14 @@ def _format_ad_block(report: AdFatigueReport) -> str:
         f"Role: {role} │ Score: {report.fatigue_score}/100",
         f"Spend: {_format_currency(report.avg_daily_spend)}/day ({report.spend_share_pct:.1f}% of total) │ 7d total: {_format_currency(report.total_spend)}",
         f"CTR: {report.current_ctr:.2f}% {_trend_arrow(ctr_signal.pct_change if ctr_signal else 0, invert=True)} │ CPC: {_format_currency(report.current_cpc)} {_trend_arrow(cpc_signal.pct_change if cpc_signal else 0)} │ CPM: {_format_currency(report.current_cpm)} {_trend_arrow(cpm_signal.pct_change if cpm_signal else 0)}",
-        f"ROAS: {report.current_roas:.1f}x {_trend_arrow(roas_signal.pct_change if roas_signal else 0, invert=True)} │ Freq: {report.current_frequency:.1f} {_trend_arrow(freq_signal.pct_change if freq_signal else 0)}",
-        f"_{report.summary}_",
+        f"ROAS: {report.current_roas:.1f}x {_trend_arrow(roas_signal.pct_change if roas_signal else 0, invert=True)} │ {cpa_display} │ Freq: {report.current_frequency:.1f} {_trend_arrow(freq_signal.pct_change if freq_signal else 0)}",
     ]
+
+    streak_line = _format_streak_line(report)
+    if streak_line:
+        lines.append(streak_line)
+
+    lines.append(f"_{report.summary}_")
 
     if report.long_trend and report.long_trend.summary:
         lines.append(f"⚠️ _{report.long_trend.summary}_ (score: {report.long_trend.score}/100)")
@@ -75,6 +103,7 @@ def _format_watch_block(report: AdFatigueReport) -> str:
     ctr_signal = next((s for s in report.signals if s.name == "ctr_decay"), None)
     cpc_signal = next((s for s in report.signals if s.name == "cpc_inflation"), None)
     cpm_signal = next((s for s in report.signals if s.name == "cpm_inflation"), None)
+    cpa_signal = next((s for s in report.signals if s.name == "cpa_inflation"), None)
     freq_signal = next((s for s in report.signals if s.name == "frequency_climb"), None)
     roas_signal = next((s for s in report.signals if s.name == "roas_decay"), None)
     share_signal = next((s for s in report.signals if s.name == "spend_share_decline"), None)
@@ -85,6 +114,7 @@ def _format_watch_block(report: AdFatigueReport) -> str:
         (ctr_signal, "CTR", True),
         (cpc_signal, "CPC", False),
         (cpm_signal, "CPM", False),
+        (cpa_signal, "CPA", False),
         (freq_signal, "Frequency", False),
         (roas_signal, "ROAS", True),
         (share_signal, "Spend share", True),
@@ -95,12 +125,18 @@ def _format_watch_block(report: AdFatigueReport) -> str:
 
     why_text = " │ ".join(reasons) if reasons else "Mild shifts across multiple signals"
 
+    cpa_display = f"CPA: {_format_currency(report.current_cpa)}" if report.current_cpa > 0 else "CPA: n/a"
+
     lines = [
         f"• *{report.ad_name}*",
         f"  Campaign: `{report.campaign_name}` │ Score: {report.fatigue_score}/100",
-        f"  Spend: {_format_currency(report.avg_daily_spend)}/day │ ROAS: {report.current_roas:.1f}x │ CTR: {report.current_ctr:.2f}% │ CPC: {_format_currency(report.current_cpc)} │ Freq: {report.current_frequency:.1f}",
+        f"  Spend: {_format_currency(report.avg_daily_spend)}/day │ ROAS: {report.current_roas:.1f}x │ {cpa_display} │ CTR: {report.current_ctr:.2f}% │ CPC: {_format_currency(report.current_cpc)} │ Freq: {report.current_frequency:.1f}",
         f"  _Why (7d):_ {why_text}",
     ]
+
+    streak_line = _format_streak_line(report)
+    if streak_line:
+        lines.append(f"  {streak_line}")
 
     if report.long_trend and report.long_trend.summary:
         lines.append(f"  ⚠️ _21d trend:_ {report.long_trend.summary} (score: {report.long_trend.score}/100)")
