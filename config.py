@@ -59,6 +59,10 @@ class Config:
     efficiency_roas_floor: float = 2.0  # Above this = efficiency ad
     engagement_ctr_floor: float = 1.5   # Above this CTR% + low ROAS = engagement ad
 
+    # Daily ROAS warning check — separate from fatigue analysis
+    roas_warning_min_spend_7d: float = 200.0  # Only flag ads spending > $X over 7 days
+    roas_warning_threshold: float = 1.6       # Flag ads with ROAS below this
+
     @classmethod
     def from_env(cls) -> "Config":
         cfg = cls(

@@ -255,6 +255,112 @@ def build_slack_message(reports: list[AdFatigueReport]) -> dict:
     return {"blocks": blocks}
 
 
+def build_roas_warning_message(reports: list[AdFatigueReport], config: Config) -> dict | None:
+    """
+    Build a separate ROAS warning message.
+    Flags ads with 7d spend > threshold AND ROAS < threshold.
+    Returns None if no ads match.
+    """
+    flagged = [
+        r for r in reports
+        if r.total_spend >= config.roas_warning_min_spend_7d
+        and r.current_roas < config.roas_warning_threshold
+        and r.current_roas > 0  # Exclude ads with no purchases
+    ]
+
+    if not flagged:
+        return None
+
+    # Sort by total spend descending (biggest waste at top)
+    flagged.sort(key=lambda r: r.total_spend, reverse=True)
+
+    now = datetime.now().strftime("%a %d %b %Y")
+    total_flagged_spend = sum(r.total_spend for r in flagged)
+
+    blocks = []
+
+    blocks.append({
+        "type": "header",
+        "text": {"type": "plain_text", "text": f"⚠️ Low ROAS Warning — {now}"}
+    })
+
+    blocks.append({
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": (
+            f"*{len(flagged)} ads* with 7d spend >${config.roas_warning_min_spend_7d:.0f} "
+            f"and ROAS below {config.roas_warning_threshold}x │ "
+            f"Total 7d spend on flagged ads: *{_format_currency(total_flagged_spend)}*"
+        )}
+    })
+
+    blocks.append({"type": "divider"})
+
+    for r in flagged:
+        cpa_display = f"CPA: {_format_currency(r.current_cpa)}" if r.current_cpa > 0 else "CPA: n/a"
+
+        # Find ROAS streak if available
+        roas_streak = next((s for s in r.streaks if s.metric_name == "roas"), None)
+        cpa_streak = next((s for s in r.streaks if s.metric_name == "cpa"), None)
+
+        trend_parts = []
+        if roas_streak and (roas_streak.consecutive_days >= 3 or roas_streak.days_bad_of_total >= 4):
+            if roas_streak.consecutive_days >= 3:
+                trend_parts.append(f"ROAS {roas_streak.direction} {roas_streak.consecutive_days} consecutive days ({roas_streak.first_value:.1f}x → {roas_streak.last_value:.1f}x)")
+            else:
+                trend_parts.append(f"ROAS {roas_streak.direction} {roas_streak.days_bad_of_total} of {roas_streak.total_days} days")
+        if cpa_streak and cpa_streak.last_value > 0 and (cpa_streak.consecutive_days >= 3 or cpa_streak.days_bad_of_total >= 4):
+            if cpa_streak.consecutive_days >= 3:
+                trend_parts.append(f"CPA {cpa_streak.direction} {cpa_streak.consecutive_days} consecutive days ({_format_currency(cpa_streak.first_value)} → {_format_currency(cpa_streak.last_value)})")
+            else:
+                trend_parts.append(f"CPA {cpa_streak.direction} {cpa_streak.days_bad_of_total} of {cpa_streak.total_days} days")
+
+        lines = [
+            f"*{r.ad_name}*",
+            f"Campaign: `{r.campaign_name}`",
+            f"7d spend: *{_format_currency(r.total_spend)}* ({_format_currency(r.avg_daily_spend)}/day) │ *ROAS: {r.current_roas:.1f}x* │ {cpa_display}",
+            f"CTR: {r.current_ctr:.2f}% │ CPC: {_format_currency(r.current_cpc)} │ Freq: {r.current_frequency:.1f}",
+        ]
+
+        if trend_parts:
+            lines.append(" │ ".join(trend_parts))
+
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "\n".join(lines)}
+        })
+
+    blocks.append({"type": "divider"})
+
+    blocks.append({
+        "type": "context",
+        "elements": [{"type": "mrkdwn", "text": f"_Threshold: 7d spend >${config.roas_warning_min_spend_7d:.0f} with ROAS <{config.roas_warning_threshold}x. ROAS based on last 3 days._"}]
+    })
+
+    return {"blocks": blocks}
+
+
+def send_roas_warning(reports: list[AdFatigueReport], config: Config) -> bool:
+    """Build and send the ROAS warning as a separate Slack message."""
+    payload = build_roas_warning_message(reports, config)
+
+    if payload is None:
+        logger.info("No ads triggered ROAS warning — skipping")
+        return True  # Not an error, just nothing to report
+
+    try:
+        resp = requests.post(
+            config.slack_webhook_url,
+            json=payload,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        logger.info("ROAS warning sent successfully")
+        return True
+    except requests.RequestException as e:
+        logger.error(f"Failed to send ROAS warning: {e}")
+        return False
+
+
 def send_slack_report(reports: list[AdFatigueReport], config: Config) -> bool:
     """Format and send the fatigue report to Slack."""
     payload = build_slack_message(reports)

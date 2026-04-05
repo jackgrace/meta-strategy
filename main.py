@@ -10,7 +10,7 @@ import logging
 from config import Config
 from meta_api import fetch_ad_insights
 from fatigue_analyzer import analyze_fatigue
-from slack_reporter import send_slack_report
+from slack_reporter import send_slack_report, send_roas_warning
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,6 +46,10 @@ def run_check() -> dict:
     logger.info("Sending Slack report...")
     success = send_slack_report(reports, config)
 
+    # Step 4: Send separate ROAS warning (7d spend > $200, ROAS < 1.6)
+    logger.info("Checking ROAS warnings...")
+    roas_success = send_roas_warning(reports, config)
+
     critical = sum(1 for r in reports if r.alert_level == "critical")
     warning = sum(1 for r in reports if r.alert_level == "warning")
 
@@ -63,6 +67,7 @@ def run_check() -> dict:
         "critical": critical,
         "warning": warning,
         "slack_sent": success,
+        "roas_warning_sent": roas_success,
     }
 
 
