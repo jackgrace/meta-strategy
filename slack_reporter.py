@@ -266,6 +266,7 @@ def build_roas_warning_message(reports: list[AdFatigueReport], config: Config) -
         if r.total_spend >= config.roas_warning_min_spend_7d
         and r.current_roas < config.roas_warning_threshold
         and r.current_roas > 0  # Exclude ads with no purchases
+        and "OFF" not in r.ad_name.upper()  # Skip ads already turned off
     ]
 
     if not flagged:
