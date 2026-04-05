@@ -80,5 +80,9 @@ class Config:
             cfg.efficiency_roas_floor = float(v)
         if v := os.environ.get("ENGAGEMENT_CTR_FLOOR"):
             cfg.engagement_ctr_floor = float(v)
+        if v := os.environ.get("ROAS_WARNING_MIN_SPEND_7D"):
+            cfg.roas_warning_min_spend_7d = float(v)
+        if v := os.environ.get("ROAS_WARNING_THRESHOLD"):
+            cfg.roas_warning_threshold = float(v)
 
         return cfg
