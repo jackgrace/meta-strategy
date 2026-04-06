@@ -4,6 +4,7 @@ Pulls ad-level insights with daily breakdowns for fatigue analysis.
 """
 
 import logging
+import time
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 
@@ -101,8 +102,26 @@ def fetch_ad_insights(config: Config) -> list[AdDayMetrics]:
         page_count += 1
         logger.info(f"Fetching page {page_count} from Meta API...")
 
-        resp = requests.get(url, params=params if page_count == 1 else None)
-        resp.raise_for_status()
+        # Retry with exponential backoff for transient errors (500, 502, 503, 504)
+        resp = None
+        for attempt in range(4):
+            try:
+                resp = requests.get(url, params=params if page_count == 1 else None, timeout=60)
+                if resp.status_code in (500, 502, 503, 504) and attempt < 3:
+                    wait = 2 ** (attempt + 1)  # 2s, 4s, 8s
+                    logger.warning(f"Meta API returned {resp.status_code}, retrying in {wait}s (attempt {attempt + 1}/4)")
+                    time.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                break
+            except requests.exceptions.Timeout:
+                if attempt < 3:
+                    wait = 2 ** (attempt + 1)
+                    logger.warning(f"Meta API timeout, retrying in {wait}s (attempt {attempt + 1}/4)")
+                    time.sleep(wait)
+                else:
+                    raise
+
         data = resp.json()
 
         for row in data.get("data", []):
