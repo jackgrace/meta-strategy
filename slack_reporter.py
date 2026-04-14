@@ -64,26 +64,36 @@ def _format_streak_line(report: AdFatigueReport) -> str | None:
 
 
 def _format_ad_block(report: AdFatigueReport) -> str:
-    """Format a single ad's fatigue report for Slack."""
+    """Format a single ad's fatigue report for Slack with clear period comparison."""
     role = ROLE_LABEL.get(report.role, report.role)
 
-    # Trend arrows from 7d baseline vs recent comparison
     roas_signal = next((s for s in report.signals if s.name == "roas_decay"), None)
     cpa_signal = next((s for s in report.signals if s.name == "cpa_inflation"), None)
     cpc_signal = next((s for s in report.signals if s.name == "cpc_inflation"), None)
     ctr_signal = next((s for s in report.signals if s.name == "ctr_decay"), None)
     freq_signal = next((s for s in report.signals if s.name == "frequency_climb"), None)
 
-    cpa_display = f"CPA: {_format_currency(report.cpa_7d)} {_trend_arrow(cpa_signal.pct_change if cpa_signal else 0)}" if report.cpa_7d > 0 else "CPA: n/a"
-    purchases_display = f"{report.total_7d_purchases} purchases" if report.total_7d_purchases > 0 else "0 purchases"
+    # Baseline (first 4d) vs Recent (last 3d)
+    b_roas = f"{roas_signal.baseline_value:.2f}x" if roas_signal else "—"
+    r_roas = f"{roas_signal.recent_value:.2f}x" if roas_signal else "—"
+    b_cpa = _format_currency(cpa_signal.baseline_value) if cpa_signal and cpa_signal.baseline_value > 0 else "—"
+    r_cpa = _format_currency(cpa_signal.recent_value) if cpa_signal and cpa_signal.recent_value > 0 else "—"
+    b_cpc = _format_currency(cpc_signal.baseline_value) if cpc_signal else "—"
+    r_cpc = _format_currency(cpc_signal.recent_value) if cpc_signal else "—"
+    b_ctr = f"{ctr_signal.baseline_value:.2f}%" if ctr_signal else "—"
+    r_ctr = f"{ctr_signal.recent_value:.2f}%" if ctr_signal else "—"
+    b_freq = f"{freq_signal.baseline_value:.1f}" if freq_signal else "—"
+    r_freq = f"{freq_signal.recent_value:.1f}" if freq_signal else "—"
+
+    cpa_7d_display = _format_currency(report.cpa_7d) if report.cpa_7d > 0 else "n/a"
 
     lines = [
         f"*{report.ad_name}*",
         f"Campaign: `{report.campaign_name}`",
         f"Role: {role} │ Score: {report.fatigue_score}/100",
-        f"7d spend: {_format_currency(report.total_7d_spend)} │ {purchases_display} │ Revenue: {_format_currency(report.total_7d_revenue)}",
-        f"ROAS: {report.roas_7d:.2f}x {_trend_arrow(roas_signal.pct_change if roas_signal else 0, invert=True)} │ {cpa_display} │ CPC: {_format_currency(report.cpc_7d)} {_trend_arrow(cpc_signal.pct_change if cpc_signal else 0)}",
-        f"CTR: {report.ctr_7d:.2f}% {_trend_arrow(ctr_signal.pct_change if ctr_signal else 0, invert=True)} │ Freq: {report.current_frequency:.1f} {_trend_arrow(freq_signal.pct_change if freq_signal else 0)}",
+        f"*7d totals:* Spend: {_format_currency(report.total_7d_spend)} │ ROAS: {report.roas_7d:.2f}x │ CPA: {cpa_7d_display} │ {report.total_7d_purchases} purchases │ Revenue: {_format_currency(report.total_7d_revenue)}",
+        f"*First 4d:* ROAS: {b_roas} │ CPA: {b_cpa} │ CPC: {b_cpc} │ CTR: {b_ctr} │ Freq: {b_freq}",
+        f"*Last 3d:*  ROAS: {r_roas} │ CPA: {r_cpa} │ CPC: {r_cpc} │ CTR: {r_ctr} │ Freq: {r_freq}",
     ]
 
     streak_line = _format_streak_line(report)
@@ -99,39 +109,33 @@ def _format_ad_block(report: AdFatigueReport) -> str:
 
 
 def _format_watch_block(report: AdFatigueReport) -> str:
-    """Format a Watch ad with full signal breakdown explaining WHY it's flagged."""
+    """Format a Watch ad with clear 7d totals + baseline vs recent comparison."""
     ctr_signal = next((s for s in report.signals if s.name == "ctr_decay"), None)
     cpc_signal = next((s for s in report.signals if s.name == "cpc_inflation"), None)
-    cpm_signal = next((s for s in report.signals if s.name == "cpm_inflation"), None)
     cpa_signal = next((s for s in report.signals if s.name == "cpa_inflation"), None)
     freq_signal = next((s for s in report.signals if s.name == "frequency_climb"), None)
     roas_signal = next((s for s in report.signals if s.name == "roas_decay"), None)
-    share_signal = next((s for s in report.signals if s.name == "spend_share_decline"), None)
 
-    # Build the "why" — list signals that are actually moving
-    reasons = []
-    for signal, label, invert in [
-        (ctr_signal, "CTR", True),
-        (cpc_signal, "CPC", False),
-        (cpm_signal, "CPM", False),
-        (cpa_signal, "CPA", False),
-        (freq_signal, "Frequency", False),
-        (roas_signal, "ROAS", True),
-        (share_signal, "Spend share", True),
-    ]:
-        if signal and signal.raw_score > 10:
-            direction = "down" if (signal.pct_change > 0) == invert else "up"
-            reasons.append(f"{label} {direction} {abs(signal.pct_change):.0f}%")
+    # Baseline (first 4d) vs Recent (last 3d) values from signals
+    b_roas = f"{roas_signal.baseline_value:.2f}x" if roas_signal else "—"
+    r_roas = f"{roas_signal.recent_value:.2f}x" if roas_signal else "—"
+    b_cpa = _format_currency(cpa_signal.baseline_value) if cpa_signal and cpa_signal.baseline_value > 0 else "—"
+    r_cpa = _format_currency(cpa_signal.recent_value) if cpa_signal and cpa_signal.recent_value > 0 else "—"
+    b_cpc = _format_currency(cpc_signal.baseline_value) if cpc_signal else "—"
+    r_cpc = _format_currency(cpc_signal.recent_value) if cpc_signal else "—"
+    b_ctr = f"{ctr_signal.baseline_value:.2f}%" if ctr_signal else "—"
+    r_ctr = f"{ctr_signal.recent_value:.2f}%" if ctr_signal else "—"
+    b_freq = f"{freq_signal.baseline_value:.1f}" if freq_signal else "—"
+    r_freq = f"{freq_signal.recent_value:.1f}" if freq_signal else "—"
 
-    why_text = " │ ".join(reasons) if reasons else "Mild shifts across multiple signals"
-
-    cpa_display = f"CPA: {_format_currency(report.cpa_7d)}" if report.cpa_7d > 0 else "CPA: n/a"
+    cpa_7d_display = _format_currency(report.cpa_7d) if report.cpa_7d > 0 else "n/a"
 
     lines = [
         f"• *{report.ad_name}*",
         f"  Campaign: `{report.campaign_name}` │ Score: {report.fatigue_score}/100",
-        f"  7d spend: {_format_currency(report.total_7d_spend)} │ ROAS: {report.roas_7d:.2f}x │ {cpa_display} │ CTR: {report.ctr_7d:.2f}% │ CPC: {_format_currency(report.cpc_7d)} │ Freq: {report.current_frequency:.1f}",
-        f"  _Why (7d):_ {why_text}",
+        f"  *7d totals:* Spend: {_format_currency(report.total_7d_spend)} │ ROAS: {report.roas_7d:.2f}x │ CPA: {cpa_7d_display} │ {report.total_7d_purchases} purchases",
+        f"  *First 4d:* ROAS: {b_roas} │ CPA: {b_cpa} │ CPC: {b_cpc} │ CTR: {b_ctr} │ Freq: {b_freq}",
+        f"  *Last 3d:*  ROAS: {r_roas} │ CPA: {r_cpa} │ CPC: {r_cpc} │ CTR: {r_ctr} │ Freq: {r_freq}",
     ]
 
     streak_line = _format_streak_line(report)
