@@ -121,7 +121,18 @@ class AdFatigueReport:
     total_spend: float
     spend_share_pct: float  # % of total ASC spend
 
-    # Current metrics (recent window averages)
+    # 7-day totals (matches Ads Manager view)
+    total_7d_spend: float
+    total_7d_revenue: float
+    total_7d_purchases: int
+    total_7d_clicks: int
+    total_7d_impressions: int
+    roas_7d: float        # total revenue / total spend (weighted, matches Ads Manager)
+    cpa_7d: float         # total spend / total purchases (weighted)
+    ctr_7d: float         # total clicks / total impressions * 100 (weighted)
+    cpc_7d: float         # total spend / total clicks (weighted)
+
+    # Recent 3-day averages (for trend detection)
     current_ctr: float
     current_cpc: float
     current_cpm: float
@@ -447,6 +458,18 @@ def analyze_fatigue(
                         alert_level = "watch"
                         summary = f"Short-term stable, but: {long_summary}"
 
+        # 7-day weighted totals (matches Ads Manager calculations)
+        total_7d_spend = sum(d.spend for d in short_days)
+        total_7d_revenue = sum(d.revenue for d in short_days)
+        total_7d_purchases = sum(d.purchases for d in short_days)
+        total_7d_clicks = sum(d.clicks for d in short_days)
+        total_7d_impressions = sum(d.impressions for d in short_days)
+
+        roas_7d = total_7d_revenue / total_7d_spend if total_7d_spend > 0 else 0
+        cpa_7d = total_7d_spend / total_7d_purchases if total_7d_purchases > 0 else 0
+        ctr_7d = (total_7d_clicks / total_7d_impressions * 100) if total_7d_impressions > 0 else 0
+        cpc_7d = total_7d_spend / total_7d_clicks if total_7d_clicks > 0 else 0
+
         # Day-over-day streak detection on the short window
         streaks = [
             _analyze_streak(short_days, "roas", bad_direction="down"),
@@ -469,6 +492,15 @@ def analyze_fatigue(
             avg_daily_spend=avg_daily_spend,
             total_spend=total_spend,
             spend_share_pct=spend_share,
+            total_7d_spend=total_7d_spend,
+            total_7d_revenue=total_7d_revenue,
+            total_7d_purchases=total_7d_purchases,
+            total_7d_clicks=total_7d_clicks,
+            total_7d_impressions=total_7d_impressions,
+            roas_7d=roas_7d,
+            cpa_7d=cpa_7d,
+            ctr_7d=ctr_7d,
+            cpc_7d=cpc_7d,
             current_ctr=recent_metrics["ctr"],
             current_cpc=recent_metrics["cpc"],
             current_cpm=recent_metrics["cpm"],

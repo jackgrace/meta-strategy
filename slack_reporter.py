@@ -67,23 +67,23 @@ def _format_ad_block(report: AdFatigueReport) -> str:
     """Format a single ad's fatigue report for Slack."""
     role = ROLE_LABEL.get(report.role, report.role)
 
-    # Find key signal changes for display
-    ctr_signal = next((s for s in report.signals if s.name == "ctr_decay"), None)
-    cpc_signal = next((s for s in report.signals if s.name == "cpc_inflation"), None)
-    cpm_signal = next((s for s in report.signals if s.name == "cpm_inflation"), None)
-    cpa_signal = next((s for s in report.signals if s.name == "cpa_inflation"), None)
-    freq_signal = next((s for s in report.signals if s.name == "frequency_climb"), None)
+    # Trend arrows from 7d baseline vs recent comparison
     roas_signal = next((s for s in report.signals if s.name == "roas_decay"), None)
+    cpa_signal = next((s for s in report.signals if s.name == "cpa_inflation"), None)
+    cpc_signal = next((s for s in report.signals if s.name == "cpc_inflation"), None)
+    ctr_signal = next((s for s in report.signals if s.name == "ctr_decay"), None)
+    freq_signal = next((s for s in report.signals if s.name == "frequency_climb"), None)
 
-    cpa_display = f"CPA: {_format_currency(report.current_cpa)} {_trend_arrow(cpa_signal.pct_change if cpa_signal else 0)}" if report.current_cpa > 0 else "CPA: n/a"
+    cpa_display = f"CPA: {_format_currency(report.cpa_7d)} {_trend_arrow(cpa_signal.pct_change if cpa_signal else 0)}" if report.cpa_7d > 0 else "CPA: n/a"
+    purchases_display = f"{report.total_7d_purchases} purchases" if report.total_7d_purchases > 0 else "0 purchases"
 
     lines = [
         f"*{report.ad_name}*",
         f"Campaign: `{report.campaign_name}`",
         f"Role: {role} │ Score: {report.fatigue_score}/100",
-        f"Spend: {_format_currency(report.avg_daily_spend)}/day ({report.spend_share_pct:.1f}% of total) │ 7d total: {_format_currency(report.total_spend)}",
-        f"CTR: {report.current_ctr:.2f}% {_trend_arrow(ctr_signal.pct_change if ctr_signal else 0, invert=True)} │ CPC: {_format_currency(report.current_cpc)} {_trend_arrow(cpc_signal.pct_change if cpc_signal else 0)} │ CPM: {_format_currency(report.current_cpm)} {_trend_arrow(cpm_signal.pct_change if cpm_signal else 0)}",
-        f"ROAS: {report.current_roas:.1f}x {_trend_arrow(roas_signal.pct_change if roas_signal else 0, invert=True)} │ {cpa_display} │ Freq: {report.current_frequency:.1f} {_trend_arrow(freq_signal.pct_change if freq_signal else 0)}",
+        f"7d spend: {_format_currency(report.total_7d_spend)} │ {purchases_display} │ Revenue: {_format_currency(report.total_7d_revenue)}",
+        f"ROAS: {report.roas_7d:.2f}x {_trend_arrow(roas_signal.pct_change if roas_signal else 0, invert=True)} │ {cpa_display} │ CPC: {_format_currency(report.cpc_7d)} {_trend_arrow(cpc_signal.pct_change if cpc_signal else 0)}",
+        f"CTR: {report.ctr_7d:.2f}% {_trend_arrow(ctr_signal.pct_change if ctr_signal else 0, invert=True)} │ Freq: {report.current_frequency:.1f} {_trend_arrow(freq_signal.pct_change if freq_signal else 0)}",
     ]
 
     streak_line = _format_streak_line(report)
@@ -125,12 +125,12 @@ def _format_watch_block(report: AdFatigueReport) -> str:
 
     why_text = " │ ".join(reasons) if reasons else "Mild shifts across multiple signals"
 
-    cpa_display = f"CPA: {_format_currency(report.current_cpa)}" if report.current_cpa > 0 else "CPA: n/a"
+    cpa_display = f"CPA: {_format_currency(report.cpa_7d)}" if report.cpa_7d > 0 else "CPA: n/a"
 
     lines = [
         f"• *{report.ad_name}*",
         f"  Campaign: `{report.campaign_name}` │ Score: {report.fatigue_score}/100",
-        f"  Spend: {_format_currency(report.avg_daily_spend)}/day │ ROAS: {report.current_roas:.1f}x │ {cpa_display} │ CTR: {report.current_ctr:.2f}% │ CPC: {_format_currency(report.current_cpc)} │ Freq: {report.current_frequency:.1f}",
+        f"  7d spend: {_format_currency(report.total_7d_spend)} │ ROAS: {report.roas_7d:.2f}x │ {cpa_display} │ CTR: {report.ctr_7d:.2f}% │ CPC: {_format_currency(report.cpc_7d)} │ Freq: {report.current_frequency:.1f}",
         f"  _Why (7d):_ {why_text}",
     ]
 
@@ -263,9 +263,9 @@ def build_roas_warning_message(reports: list[AdFatigueReport], config: Config) -
     """
     flagged = [
         r for r in reports
-        if r.total_spend >= config.roas_warning_min_spend_7d
-        and r.current_roas < config.roas_warning_threshold
-        and r.current_roas > 0  # Exclude ads with no purchases
+        if r.total_7d_spend >= config.roas_warning_min_spend_7d
+        and r.roas_7d < config.roas_warning_threshold
+        and r.roas_7d > 0  # Exclude ads with no purchases
         and "OFF" not in r.ad_name.upper()  # Skip ads already turned off
     ]
 
@@ -273,10 +273,10 @@ def build_roas_warning_message(reports: list[AdFatigueReport], config: Config) -
         return None
 
     # Sort by total spend descending (biggest waste at top)
-    flagged.sort(key=lambda r: r.total_spend, reverse=True)
+    flagged.sort(key=lambda r: r.total_7d_spend, reverse=True)
 
     now = datetime.now().strftime("%a %d %b %Y")
-    total_flagged_spend = sum(r.total_spend for r in flagged)
+    total_flagged_spend = sum(r.total_7d_spend for r in flagged)
 
     blocks = []
 
@@ -297,7 +297,8 @@ def build_roas_warning_message(reports: list[AdFatigueReport], config: Config) -
     blocks.append({"type": "divider"})
 
     for r in flagged:
-        cpa_display = f"CPA: {_format_currency(r.current_cpa)}" if r.current_cpa > 0 else "CPA: n/a"
+        cpa_display = f"CPA: {_format_currency(r.cpa_7d)}" if r.cpa_7d > 0 else "CPA: n/a"
+        purchases_display = f"{r.total_7d_purchases} purchases" if r.total_7d_purchases > 0 else "0 purchases"
 
         # Find ROAS streak if available
         roas_streak = next((s for s in r.streaks if s.metric_name == "roas"), None)
@@ -318,8 +319,8 @@ def build_roas_warning_message(reports: list[AdFatigueReport], config: Config) -
         lines = [
             f"*{r.ad_name}*",
             f"Campaign: `{r.campaign_name}`",
-            f"7d spend: *{_format_currency(r.total_spend)}* ({_format_currency(r.avg_daily_spend)}/day) │ *ROAS: {r.current_roas:.1f}x* │ {cpa_display}",
-            f"CTR: {r.current_ctr:.2f}% │ CPC: {_format_currency(r.current_cpc)} │ Freq: {r.current_frequency:.1f}",
+            f"7d spend: *{_format_currency(r.total_7d_spend)}* │ {purchases_display} │ Revenue: {_format_currency(r.total_7d_revenue)}",
+            f"*ROAS: {r.roas_7d:.2f}x* │ {cpa_display} │ CTR: {r.ctr_7d:.2f}% │ CPC: {_format_currency(r.cpc_7d)}",
         ]
 
         if trend_parts:
@@ -334,7 +335,7 @@ def build_roas_warning_message(reports: list[AdFatigueReport], config: Config) -
 
     blocks.append({
         "type": "context",
-        "elements": [{"type": "mrkdwn", "text": f"_Threshold: 7d spend >${config.roas_warning_min_spend_7d:.0f} with ROAS <{config.roas_warning_threshold}x. ROAS based on last 3 days._"}]
+        "elements": [{"type": "mrkdwn", "text": f"_Threshold: 7d spend >${config.roas_warning_min_spend_7d:.0f} with ROAS <{config.roas_warning_threshold}x. All metrics are 7-day weighted totals (matches Ads Manager)._"}]
     })
 
     return {"blocks": blocks}
