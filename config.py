@@ -63,6 +63,9 @@ class Config:
     roas_warning_min_spend_7d: float = 200.0  # Only flag ads spending > $X over 7 days
     roas_warning_threshold: float = 1.6       # Flag ads with ROAS below this
 
+    # Testing campaign missed opportunity check
+    testing_campaign_keyword: str = "TESTING"  # Campaign name must contain this
+
     @classmethod
     def from_env(cls) -> "Config":
         cfg = cls(

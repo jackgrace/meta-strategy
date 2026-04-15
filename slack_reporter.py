@@ -9,6 +9,7 @@ from datetime import datetime
 import requests
 
 from fatigue_analyzer import AdFatigueReport
+from testing_analyzer import TestingAdReport
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -364,6 +365,86 @@ def send_roas_warning(reports: list[AdFatigueReport], config: Config) -> bool:
         return True
     except requests.RequestException as e:
         logger.error(f"Failed to send ROAS warning: {e}")
+        return False
+
+
+def build_testing_missed_opps_message(reports: list[TestingAdReport]) -> dict | None:
+    """
+    Build a Slack message for testing campaign ads that were turned off
+    but had ATC metrics at or below account baseline.
+    """
+    if not reports:
+        return None
+
+    now = datetime.now().strftime("%a %d %b %Y")
+    baseline_atc_rate = reports[0].baseline_atc_rate
+    baseline_cost_atc = reports[0].baseline_cost_per_atc
+    total_spend = sum(r.total_spend for r in reports)
+
+    blocks = []
+
+    blocks.append({
+        "type": "header",
+        "text": {"type": "plain_text", "text": f"🔍 Testing — Missed Opportunities — {now}"}
+    })
+
+    blocks.append({
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": (
+            f"*{len(reports)} ads* turned off with 0 purchases but strong ATC signals\n"
+            f"Account baseline: ATC rate *{baseline_atc_rate:.2f}%* │ Cost per ATC *{_format_currency(baseline_cost_atc)}*\n"
+            f"Total spend on flagged ads: *{_format_currency(total_spend)}*"
+        )}
+    })
+
+    blocks.append({"type": "divider"})
+
+    for r in reports:
+        atc_rate_icon = "✅" if r.atc_rate_vs_baseline in ("at", "above") else "—"
+        cost_atc_icon = "✅" if r.cost_atc_vs_baseline in ("at", "below") else "—"
+
+        lines = [
+            f"*{r.ad_name}*",
+            f"Campaign: `{r.campaign_name}` │ Adset: `{r.adset_name}`",
+            f"Spend: {_format_currency(r.total_spend)} │ {r.total_clicks} clicks │ {r.total_add_to_carts} ATCs │ 0 purchases",
+            f"{atc_rate_icon} ATC rate: *{r.atc_rate:.2f}%* (baseline: {baseline_atc_rate:.2f}%) │ {cost_atc_icon} Cost/ATC: *{_format_currency(r.cost_per_atc)}* (baseline: {_format_currency(baseline_cost_atc)})",
+            f"CTR: {r.ctr:.2f}% │ CPC: {_format_currency(r.cpc)} │ {r.days_active} days of data",
+        ]
+
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "\n".join(lines)}
+        })
+
+    blocks.append({"type": "divider"})
+
+    blocks.append({
+        "type": "context",
+        "elements": [{"type": "mrkdwn", "text": "_These ads had no purchases but were adding to cart at or better than the account average. They may deserve a second chance with more budget/time._"}]
+    })
+
+    return {"blocks": blocks}
+
+
+def send_testing_missed_opps(reports: list[TestingAdReport], config: Config) -> bool:
+    """Build and send the testing missed opportunities report."""
+    payload = build_testing_missed_opps_message(reports)
+
+    if payload is None:
+        logger.info("No testing missed opportunities found — skipping")
+        return True
+
+    try:
+        resp = requests.post(
+            config.slack_webhook_url,
+            json=payload,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        logger.info("Testing missed opportunities report sent successfully")
+        return True
+    except requests.RequestException as e:
+        logger.error(f"Failed to send testing missed opportunities report: {e}")
         return False
 
 

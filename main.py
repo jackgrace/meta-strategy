@@ -10,7 +10,8 @@ import logging
 from config import Config
 from meta_api import fetch_ad_insights
 from fatigue_analyzer import analyze_fatigue
-from slack_reporter import send_slack_report, send_roas_warning
+from testing_analyzer import analyze_testing_missed_opportunities
+from slack_reporter import send_slack_report, send_roas_warning, send_testing_missed_opps
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,6 +50,11 @@ def run_check() -> dict:
     # Step 4: Send separate ROAS warning (7d spend > $200, ROAS < 1.6)
     logger.info("Checking ROAS warnings...")
     roas_success = send_roas_warning(reports, config)
+
+    # Step 5: Check testing campaigns for missed opportunities
+    logger.info("Checking testing campaign missed opportunities...")
+    testing_reports = analyze_testing_missed_opportunities(metrics, config)
+    testing_success = send_testing_missed_opps(testing_reports, config)
 
     critical = sum(1 for r in reports if r.alert_level == "critical")
     warning = sum(1 for r in reports if r.alert_level == "warning")
