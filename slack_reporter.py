@@ -370,8 +370,8 @@ def send_roas_warning(reports: list[AdFatigueReport], config: Config) -> bool:
 
 def build_testing_missed_opps_message(reports: list[TestingAdReport]) -> dict | None:
     """
-    Build a Slack message for testing campaign ads that were turned off
-    but had ATC metrics at or below account baseline.
+    Build a Slack message for testing campaign OFF ads with ATC metrics
+    at or below the testing campaign baseline.
     """
     if not reports:
         return None
@@ -385,15 +385,15 @@ def build_testing_missed_opps_message(reports: list[TestingAdReport]) -> dict | 
 
     blocks.append({
         "type": "header",
-        "text": {"type": "plain_text", "text": f"🔍 Testing — Missed Opportunities — {now}"}
+        "text": {"type": "plain_text", "text": f"🔍 Testing — OFF Ads with Strong ATC — {now}"}
     })
 
     blocks.append({
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
-            f"*{len(reports)} ads* turned off with 0 purchases but strong ATC signals\n"
-            f"Account baseline: ATC rate *{baseline_atc_rate:.2f}%* │ Cost per ATC *{_format_currency(baseline_cost_atc)}*\n"
-            f"Total spend on flagged ads: *{_format_currency(total_spend)}*"
+            f"*{len(reports)} OFF ads* with ATC at or better than testing campaign baseline\n"
+            f"Testing baseline (active ads): ATC rate *{baseline_atc_rate:.2f}%* │ Cost/ATC *{_format_currency(baseline_cost_atc)}*\n"
+            f"Total 30d spend on flagged ads: *{_format_currency(total_spend)}*"
         )}
     })
 
@@ -403,10 +403,15 @@ def build_testing_missed_opps_message(reports: list[TestingAdReport]) -> dict | 
         atc_rate_icon = "✅" if r.atc_rate_vs_baseline in ("at", "above") else "—"
         cost_atc_icon = "✅" if r.cost_atc_vs_baseline in ("at", "below") else "—"
 
+        # Show purchases/ROAS if they exist
+        purchase_text = f"{r.total_purchases} purchases"
+        if r.total_purchases > 0:
+            purchase_text += f" │ ROAS: {r.roas:.2f}x │ Revenue: {_format_currency(r.total_revenue)}"
+
         lines = [
             f"*{r.ad_name}*",
             f"Campaign: `{r.campaign_name}` │ Adset: `{r.adset_name}`",
-            f"Spend: {_format_currency(r.total_spend)} │ {r.total_clicks} clicks │ {r.total_add_to_carts} ATCs │ 0 purchases",
+            f"30d spend: {_format_currency(r.total_spend)} │ {r.total_clicks} clicks │ {r.total_add_to_carts} ATCs │ {purchase_text}",
             f"{atc_rate_icon} ATC rate: *{r.atc_rate:.2f}%* (baseline: {baseline_atc_rate:.2f}%) │ {cost_atc_icon} Cost/ATC: *{_format_currency(r.cost_per_atc)}* (baseline: {_format_currency(baseline_cost_atc)})",
             f"CTR: {r.ctr:.2f}% │ CPC: {_format_currency(r.cpc)} │ {r.days_active} days of data",
         ]
@@ -420,7 +425,7 @@ def build_testing_missed_opps_message(reports: list[TestingAdReport]) -> dict | 
 
     blocks.append({
         "type": "context",
-        "elements": [{"type": "mrkdwn", "text": "_These ads had no purchases but were adding to cart at or better than the account average. They may deserve a second chance with more budget/time._"}]
+        "elements": [{"type": "mrkdwn", "text": "_These OFF ads had ATC metrics at or better than your active testing ads. Based on 30-day window. Consider reactivating with more budget/time._"}]
     })
 
     return {"blocks": blocks}

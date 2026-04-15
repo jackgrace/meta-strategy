@@ -1,9 +1,12 @@
 """
-Testing campaign missed opportunity analyzer.
+Testing campaign ATC analysis.
 
-Finds ads in TESTING campaigns that were turned off (have "OFF" in name)
-with 0 purchases, but whose ATC rate or cost per ATC was at or below
-the account baseline — these may have been killed too early.
+Checks ads with "OFF" in their name within TESTING campaigns against
+the TESTING campaign's own ATC baseline (30-day window).
+
+Flags ads whose ATC rate or cost per ATC was at or below the testing
+campaign baseline — regardless of purchase count. These may have been
+turned off too early or deserve a second look.
 """
 
 import logging
@@ -28,13 +31,15 @@ class TestingAdReport:
     total_clicks: int
     total_add_to_carts: int
     total_purchases: int
+    total_revenue: float
+    roas: float
     ctr: float            # Weighted CTR
     cpc: float            # Weighted CPC
     atc_rate: float       # ATCs / clicks * 100 (weighted)
     cost_per_atc: float   # Spend / ATCs (weighted)
     days_active: int
 
-    # How it compares to baseline
+    # How it compares to testing campaign baseline
     baseline_atc_rate: float
     baseline_cost_per_atc: float
     atc_rate_vs_baseline: str    # "below", "at", "above"
@@ -46,15 +51,16 @@ def analyze_testing_missed_opportunities(
     config: Config,
 ) -> list[TestingAdReport]:
     """
-    Find ads in TESTING campaigns that were killed too early.
+    Check OFF ads in TESTING campaigns against the testing campaign's
+    own ATC baseline over a 30-day window.
 
     1. Filter to TESTING campaigns only
-    2. Calculate account-wide ATC baseline from all active ads
-    3. Find ads with "OFF" in name + 0 purchases
+    2. Calculate ATC baseline from ACTIVE testing ads (not OFF)
+    3. Find ads with "OFF" in name
     4. Flag those with ATC rate or cost per ATC at or below baseline
     """
 
-    # Split into testing vs all ads
+    # Filter to testing campaigns
     testing_metrics = [
         m for m in all_metrics
         if config.testing_campaign_keyword.upper() in m.campaign_name.upper()
@@ -64,53 +70,53 @@ def analyze_testing_missed_opportunities(
         logger.info("No TESTING campaign data found")
         return []
 
-    # Calculate account-wide ATC baseline from ALL ads (not just testing)
-    # This gives us the benchmark to compare against
-    all_by_ad: dict[str, list[AdDayMetrics]] = defaultdict(list)
-    for m in all_metrics:
-        all_by_ad[m.ad_id].append(m)
-
-    # Baseline: median ATC rate and cost per ATC across all ads with ATCs
-    all_atc_rates = []
-    all_cost_per_atcs = []
-
-    for ad_id, days in all_by_ad.items():
-        total_clicks = sum(d.clicks for d in days)
-        total_atcs = sum(d.add_to_carts for d in days)
-        total_spend = sum(d.spend for d in days)
-
-        if total_atcs > 0 and total_clicks > 0:
-            all_atc_rates.append(total_atcs / total_clicks * 100)
-            all_cost_per_atcs.append(total_spend / total_atcs)
-
-    if not all_atc_rates:
-        logger.info("No ATC data available for baseline calculation")
-        return []
-
-    # Use median as baseline (more robust than mean against outliers)
-    all_atc_rates.sort()
-    all_cost_per_atcs.sort()
-    baseline_atc_rate = all_atc_rates[len(all_atc_rates) // 2]
-    baseline_cost_per_atc = all_cost_per_atcs[len(all_cost_per_atcs) // 2]
-
-    logger.info(
-        f"ATC baseline: rate={baseline_atc_rate:.2f}%, "
-        f"cost=${baseline_cost_per_atc:.2f} "
-        f"(from {len(all_atc_rates)} ads with ATCs)"
-    )
-
     # Group testing metrics by ad
     testing_by_ad: dict[str, list[AdDayMetrics]] = defaultdict(list)
     for m in testing_metrics:
         testing_by_ad[m.ad_id].append(m)
 
+    # Calculate ATC baseline from ACTIVE testing ads (those WITHOUT "OFF")
+    # This is the testing campaign's own performance benchmark
+    baseline_atc_rates = []
+    baseline_cost_per_atcs = []
+
+    for ad_id, days in testing_by_ad.items():
+        ad_name = days[0].ad_name
+        if "OFF" in ad_name.upper():
+            continue  # Skip OFF ads for baseline calculation
+
+        total_clicks = sum(d.clicks for d in days)
+        total_atcs = sum(d.add_to_carts for d in days)
+        total_spend = sum(d.spend for d in days)
+
+        if total_atcs > 0 and total_clicks > 0:
+            baseline_atc_rates.append(total_atcs / total_clicks * 100)
+            baseline_cost_per_atcs.append(total_spend / total_atcs)
+
+    if not baseline_atc_rates:
+        logger.info("No active testing ads with ATC data for baseline")
+        return []
+
+    # Median baseline (robust against outliers)
+    baseline_atc_rates.sort()
+    baseline_cost_per_atcs.sort()
+    baseline_atc_rate = baseline_atc_rates[len(baseline_atc_rates) // 2]
+    baseline_cost_per_atc = baseline_cost_per_atcs[len(baseline_cost_per_atcs) // 2]
+
+    logger.info(
+        f"Testing campaign ATC baseline: rate={baseline_atc_rate:.2f}%, "
+        f"cost=${baseline_cost_per_atc:.2f} "
+        f"(from {len(baseline_atc_rates)} active testing ads)"
+    )
+
+    # Now check OFF ads against this baseline
     reports = []
 
     for ad_id, days in testing_by_ad.items():
         ad_name = days[0].ad_name
         campaign_name = days[0].campaign_name
 
-        # Must have "OFF" in name (turned off)
+        # Must have "OFF" in name
         if "OFF" not in ad_name.upper():
             continue
 
@@ -119,12 +125,9 @@ def analyze_testing_missed_opportunities(
         total_clicks = sum(d.clicks for d in days)
         total_atcs = sum(d.add_to_carts for d in days)
         total_purchases = sum(d.purchases for d in days)
+        total_revenue = sum(d.revenue for d in days)
 
-        # Must have 0 purchases
-        if total_purchases > 0:
-            continue
-
-        # Must have some ATCs to be a missed opportunity
+        # Need at least some ATCs to evaluate
         if total_atcs == 0:
             continue
 
@@ -133,8 +136,9 @@ def analyze_testing_missed_opportunities(
         cost_per_atc = total_spend / total_atcs if total_atcs > 0 else 0
         ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0
         cpc = total_spend / total_clicks if total_clicks > 0 else 0
+        roas = total_revenue / total_spend if total_spend > 0 else 0
 
-        # Compare to baseline (within 10% = "at baseline")
+        # Compare to testing campaign baseline (within 10% = "at baseline")
         if atc_rate >= baseline_atc_rate * 0.9:
             atc_rate_vs = "at" if atc_rate <= baseline_atc_rate * 1.1 else "above"
         else:
@@ -161,6 +165,8 @@ def analyze_testing_missed_opportunities(
             total_clicks=total_clicks,
             total_add_to_carts=total_atcs,
             total_purchases=total_purchases,
+            total_revenue=total_revenue,
+            roas=roas,
             ctr=ctr,
             cpc=cpc,
             atc_rate=atc_rate,
@@ -177,7 +183,7 @@ def analyze_testing_missed_opportunities(
 
     logger.info(
         f"Testing campaign: {len(testing_by_ad)} ads total, "
-        f"{len(reports)} missed opportunities flagged"
+        f"{len(reports)} OFF ads with ATC at/below baseline flagged"
     )
 
     return reports
