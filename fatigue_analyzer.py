@@ -431,16 +431,18 @@ def analyze_fatigue(
 
         # Long window: only analyze if short window says healthy/watch
         # (no point double-flagging ads already critical/warning)
+        # Constrain to last 21 days even if more data is available (testing pulls 90d)
         long_trend = None
-        if alert_level in ("healthy", "watch") and len(all_days) >= 10:
-            long_split = max(1, len(all_days) - config.long_recent_days)
-            long_baseline = all_days[:long_split]
-            long_recent = all_days[long_split:]
+        long_days = all_days[-config.long_lookback_days:]
+        if alert_level in ("healthy", "watch") and len(long_days) >= 10:
+            long_split = max(1, len(long_days) - config.long_recent_days)
+            long_baseline = long_days[:long_split]
+            long_recent = long_days[long_split:]
 
             if long_baseline and long_recent:
                 long_score, long_signals = _score_window(
                     long_baseline, long_recent, weights,
-                    total_spend_all, len(all_days),
+                    total_spend_all, len(long_days),
                 )
 
                 # Only surface if the long window reveals meaningful decay
@@ -450,7 +452,7 @@ def analyze_fatigue(
                         score=long_score,
                         signals=long_signals,
                         summary=long_summary,
-                        days_available=len(all_days),
+                        days_available=len(long_days),
                     )
 
                     # Upgrade healthy -> watch if long trend is significant
