@@ -370,16 +370,33 @@ def send_roas_warning(reports: list[AdFatigueReport], config: Config) -> bool:
 
 def build_testing_missed_opps_message(reports: list[TestingAdReport]) -> dict | None:
     """
-    Build a Slack message for testing campaign OFF ads with ATC metrics
-    at or below the testing campaign baseline.
+    Build a Slack message for testing campaign paused ads with ATC metrics
+    at or better than the testing campaign baseline.
+
+    Caps display at top 20 by ATC rate to stay within Slack's block limit.
     """
     if not reports:
         return None
+
+    # Slack limits messages to 50 blocks — cap display to keep room for header/divider/footer
+    MAX_DISPLAY = 20
 
     now = datetime.now().strftime("%a %d %b %Y")
     baseline_atc_rate = reports[0].baseline_atc_rate
     baseline_cost_atc = reports[0].baseline_cost_per_atc
     total_spend = sum(r.total_spend for r in reports)
+
+    # Show strongest signals first: both baselines met, then ATC rate above
+    reports.sort(
+        key=lambda r: (
+            r.atc_rate_vs_baseline in ("at", "above") and r.cost_atc_vs_baseline in ("at", "below"),
+            r.atc_rate,
+        ),
+        reverse=True,
+    )
+
+    displayed = reports[:MAX_DISPLAY]
+    overflow = len(reports) - len(displayed)
 
     blocks = []
 
@@ -388,18 +405,22 @@ def build_testing_missed_opps_message(reports: list[TestingAdReport]) -> dict | 
         "text": {"type": "plain_text", "text": f"🔍 Testing — Paused Ads with Strong ATC — {now}"}
     })
 
+    summary_text = (
+        f"*{len(reports)} paused ads* with ATC at or better than testing campaign baseline\n"
+        f"Testing baseline (active ads): ATC rate *{baseline_atc_rate:.2f}%* │ Cost/ATC *{_format_currency(baseline_cost_atc)}*\n"
+        f"Total 30d spend on flagged ads: *{_format_currency(total_spend)}*"
+    )
+    if overflow > 0:
+        summary_text += f"\n_Showing top {MAX_DISPLAY} by ATC rate. {overflow} more flagged ads not shown._"
+
     blocks.append({
         "type": "section",
-        "text": {"type": "mrkdwn", "text": (
-            f"*{len(reports)} paused ads* with ATC at or better than testing campaign baseline\n"
-            f"Testing baseline (active ads): ATC rate *{baseline_atc_rate:.2f}%* │ Cost/ATC *{_format_currency(baseline_cost_atc)}*\n"
-            f"Total 30d spend on flagged ads: *{_format_currency(total_spend)}*"
-        )}
+        "text": {"type": "mrkdwn", "text": summary_text}
     })
 
     blocks.append({"type": "divider"})
 
-    for r in reports:
+    for r in displayed:
         atc_rate_icon = "✅" if r.atc_rate_vs_baseline in ("at", "above") else "—"
         cost_atc_icon = "✅" if r.cost_atc_vs_baseline in ("at", "below") else "—"
 
@@ -425,7 +446,7 @@ def build_testing_missed_opps_message(reports: list[TestingAdReport]) -> dict | 
 
     blocks.append({
         "type": "context",
-        "elements": [{"type": "mrkdwn", "text": "_These OFF ads had ATC metrics at or better than your active testing ads. Based on 30-day window. Consider reactivating with more budget/time._"}]
+        "elements": [{"type": "mrkdwn", "text": "_These paused ads had ATC metrics at or better than your active testing ads. Based on 30-day window. Consider reactivating with more budget/time._"}]
     })
 
     return {"blocks": blocks}
@@ -445,8 +466,13 @@ def send_testing_missed_opps(reports: list[TestingAdReport], config: Config) -> 
             json=payload,
             timeout=10,
         )
-        resp.raise_for_status()
-        logger.info("Testing missed opportunities report sent successfully")
+        if not resp.ok:
+            logger.error(
+                f"Slack rejected testing report: {resp.status_code} — "
+                f"body: {resp.text[:500]} │ blocks: {len(payload.get('blocks', []))}"
+            )
+            return False
+        logger.info(f"Testing missed opportunities report sent ({len(payload.get('blocks', []))} blocks)")
         return True
     except requests.RequestException as e:
         logger.error(f"Failed to send testing missed opportunities report: {e}")
