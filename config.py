@@ -65,7 +65,7 @@ class Config:
 
     # Testing campaign missed opportunity check
     testing_campaign_keyword: str = "TESTING"  # Campaign name must contain this
-    testing_lookback_days: int = 90  # Longer window to catch OFF ads turned off months ago
+    testing_lookback_days: int = 30  # Window for testing analysis
 
     @classmethod
     def from_env(cls) -> "Config":

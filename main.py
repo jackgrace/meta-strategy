@@ -8,7 +8,7 @@ import sys
 import logging
 
 from config import Config
-from meta_api import fetch_ad_insights
+from meta_api import fetch_ad_insights, fetch_ad_statuses
 from fatigue_analyzer import analyze_fatigue
 from testing_analyzer import analyze_testing_missed_opportunities
 from slack_reporter import send_slack_report, send_roas_warning, send_testing_missed_opps
@@ -52,8 +52,15 @@ def run_check() -> dict:
     roas_success = send_roas_warning(reports, config)
 
     # Step 5: Check testing campaigns for missed opportunities
+    logger.info("Fetching ad statuses from /ads endpoint...")
+    try:
+        ad_statuses = fetch_ad_statuses(config)
+    except Exception as e:
+        logger.error(f"Failed to fetch ad statuses: {e}")
+        ad_statuses = {}
+
     logger.info("Checking testing campaign missed opportunities...")
-    testing_reports = analyze_testing_missed_opportunities(metrics, config)
+    testing_reports = analyze_testing_missed_opportunities(metrics, ad_statuses, config)
     testing_success = send_testing_missed_opps(testing_reports, config)
 
     critical = sum(1 for r in reports if r.alert_level == "critical")

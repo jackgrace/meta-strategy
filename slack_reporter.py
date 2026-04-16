@@ -385,13 +385,13 @@ def build_testing_missed_opps_message(reports: list[TestingAdReport]) -> dict | 
 
     blocks.append({
         "type": "header",
-        "text": {"type": "plain_text", "text": f"🔍 Testing — OFF Ads with Strong ATC — {now}"}
+        "text": {"type": "plain_text", "text": f"🔍 Testing — Paused Ads with Strong ATC — {now}"}
     })
 
     blocks.append({
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
-            f"*{len(reports)} OFF ads* with ATC at or better than testing campaign baseline\n"
+            f"*{len(reports)} paused ads* with ATC at or better than testing campaign baseline\n"
             f"Testing baseline (active ads): ATC rate *{baseline_atc_rate:.2f}%* │ Cost/ATC *{_format_currency(baseline_cost_atc)}*\n"
             f"Total 30d spend on flagged ads: *{_format_currency(total_spend)}*"
         )}
@@ -410,7 +410,7 @@ def build_testing_missed_opps_message(reports: list[TestingAdReport]) -> dict | 
 
         lines = [
             f"*{r.ad_name}*",
-            f"Campaign: `{r.campaign_name}` │ Adset: `{r.adset_name}`",
+            f"Campaign: `{r.campaign_name}` │ Adset: `{r.adset_name}` │ Status: `{r.effective_status}`",
             f"30d spend: {_format_currency(r.total_spend)} │ {r.total_clicks} clicks │ {r.total_add_to_carts} ATCs │ {purchase_text}",
             f"{atc_rate_icon} ATC rate: *{r.atc_rate:.2f}%* (baseline: {baseline_atc_rate:.2f}%) │ {cost_atc_icon} Cost/ATC: *{_format_currency(r.cost_per_atc)}* (baseline: {_format_currency(baseline_cost_atc)})",
             f"CTR: {r.ctr:.2f}% │ CPC: {_format_currency(r.cpc)} │ {r.days_active} days of data",

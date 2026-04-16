@@ -189,3 +189,55 @@ def fetch_ad_insights(config: Config) -> list[AdDayMetrics]:
 
     logger.info(f"Fetched {len(all_metrics)} ad-day records across {page_count} pages")
     return all_metrics
+
+
+def fetch_ad_statuses(config: Config) -> dict[str, str]:
+    """
+    Fetch the effective_status for every ad in the account.
+    Returns a dict mapping ad_id -> effective_status.
+
+    Status values include: ACTIVE, PAUSED, DELETED, PENDING_REVIEW,
+    DISAPPROVED, CAMPAIGN_PAUSED, ADSET_PAUSED, ARCHIVED, etc.
+    """
+    url = f"{API_BASE}/{config.meta_ad_account_id}/ads"
+    params = {
+        "access_token": config.meta_access_token,
+        "fields": "id,effective_status",
+        "limit": 500,
+    }
+
+    statuses: dict[str, str] = {}
+    page_count = 0
+
+    while url:
+        page_count += 1
+
+        resp = None
+        for attempt in range(4):
+            try:
+                resp = requests.get(url, params=params if page_count == 1 else None, timeout=60)
+                if resp.status_code in (500, 502, 503, 504) and attempt < 3:
+                    wait = 2 ** (attempt + 1)
+                    logger.warning(f"/ads endpoint returned {resp.status_code}, retrying in {wait}s")
+                    time.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                break
+            except requests.exceptions.Timeout:
+                if attempt < 3:
+                    wait = 2 ** (attempt + 1)
+                    time.sleep(wait)
+                else:
+                    raise
+
+        data = resp.json()
+
+        for row in data.get("data", []):
+            statuses[row["id"]] = row.get("effective_status", "UNKNOWN")
+
+        paging = data.get("paging", {})
+        url = paging.get("next")
+        params = None
+
+    logger.info(f"Fetched effective_status for {len(statuses)} ads across {page_count} pages")
+    return statuses
