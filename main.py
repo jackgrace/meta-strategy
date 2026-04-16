@@ -21,16 +21,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def run_check() -> dict:
+def run_fatigue_and_roas() -> dict:
     """
-    Run the full fatigue check pipeline.
-    Returns a summary dict (useful for HTTP responses).
+    Run fatigue analysis + ROAS warning (the daily digest).
+    Does NOT run testing campaign analysis.
     """
-    logger.info("=== Meta Ad Fatigue Agent starting ===")
+    logger.info("=== Fatigue + ROAS check starting ===")
 
     config = Config.from_env()
 
-    # Step 1: Fetch ad insights from Meta
     logger.info("Fetching ad insights from Meta Marketing API...")
     metrics = fetch_ad_insights(config)
 
@@ -39,40 +38,22 @@ def run_check() -> dict:
         send_slack_report([], config)
         return {"status": "ok", "ads_analyzed": 0, "message": "No ad data returned"}
 
-    # Step 2: Analyze fatigue
     logger.info(f"Analyzing {len(metrics)} data points...")
     reports = analyze_fatigue(metrics, config)
 
-    # Step 3: Send Slack report
     logger.info("Sending Slack report...")
     success = send_slack_report(reports, config)
 
-    # Step 4: Send separate ROAS warning (7d spend > $200, ROAS < 1.6)
     logger.info("Checking ROAS warnings...")
     roas_success = send_roas_warning(reports, config)
-
-    # Step 5: Check testing campaigns for missed opportunities
-    logger.info("Fetching ad statuses from /ads endpoint...")
-    try:
-        ad_statuses = fetch_ad_statuses(config)
-    except Exception as e:
-        logger.error(f"Failed to fetch ad statuses: {e}")
-        ad_statuses = {}
-
-    logger.info("Checking testing campaign missed opportunities...")
-    testing_reports = analyze_testing_missed_opportunities(metrics, ad_statuses, config)
-    testing_success = send_testing_missed_opps(testing_reports, config)
 
     critical = sum(1 for r in reports if r.alert_level == "critical")
     warning = sum(1 for r in reports if r.alert_level == "warning")
 
-    if success:
-        logger.info(
-            f"=== Complete: {len(reports)} ads analyzed, "
-            f"{critical} critical, {warning} warning ==="
-        )
-    else:
-        logger.error("Failed to send Slack report")
+    logger.info(
+        f"=== Complete: {len(reports)} ads analyzed, "
+        f"{critical} critical, {warning} warning ==="
+    )
 
     return {
         "status": "ok" if success else "error",
@@ -82,6 +63,51 @@ def run_check() -> dict:
         "slack_sent": success,
         "roas_warning_sent": roas_success,
     }
+
+
+def run_testing_check() -> dict:
+    """
+    Run ONLY the testing campaign missed opportunities check.
+    Independent trigger — does not run fatigue or ROAS warning.
+    """
+    logger.info("=== Testing campaign check starting ===")
+
+    config = Config.from_env()
+
+    logger.info("Fetching ad insights from Meta Marketing API...")
+    metrics = fetch_ad_insights(config)
+
+    if not metrics:
+        logger.warning("No ad data returned from Meta API")
+        return {"status": "ok", "ads_analyzed": 0, "message": "No ad data returned"}
+
+    logger.info("Fetching ad statuses from /ads endpoint...")
+    try:
+        ad_statuses = fetch_ad_statuses(config)
+    except Exception as e:
+        logger.error(f"Failed to fetch ad statuses: {e}")
+        ad_statuses = {}
+
+    logger.info("Analyzing testing campaign missed opportunities...")
+    testing_reports = analyze_testing_missed_opportunities(metrics, ad_statuses, config)
+    testing_success = send_testing_missed_opps(testing_reports, config)
+
+    logger.info(f"=== Complete: {len(testing_reports)} testing opportunities flagged ===")
+
+    return {
+        "status": "ok" if testing_success else "error",
+        "testing_flagged": len(testing_reports),
+        "slack_sent": testing_success,
+    }
+
+
+# The daily scheduler and /run endpoint both call run_check.
+# Currently set to ONLY run the testing ATC protocol.
+# The fatigue + ROAS warning pipeline is preserved in run_fatigue_and_roas()
+# but no longer wired to the daily run — can be re-enabled by swapping below.
+def run_check() -> dict:
+    """Default daily run: testing campaign ATC check only."""
+    return run_testing_check()
 
 
 def main():
