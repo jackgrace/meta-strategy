@@ -150,12 +150,18 @@ def analyze_testing_missed_opportunities(
     # Check OFF ads against the baseline
     reports = []
     off_checked = 0
+    off_skipped_winner = 0
     off_no_atcs = 0
     off_below_baseline = 0
 
     for ad_id, days in testing_by_ad.items():
         status = ad_statuses.get(ad_id, "UNKNOWN")
         if status not in OFF_STATUSES:
+            continue
+
+        # Skip ads with WINNER in the name — already known winners, not missed opportunities
+        if "WINNER" in days[0].ad_name.upper():
+            off_skipped_winner += 1
             continue
 
         off_checked += 1
@@ -225,6 +231,7 @@ def analyze_testing_missed_opportunities(
 
     logger.info(
         f"Testing OFF ads: {off_checked} checked │ "
+        f"{off_skipped_winner} skipped (WINNER in name) │ "
         f"{off_no_atcs} with no ATCs │ "
         f"{off_below_baseline} below baseline │ "
         f"{len(reports)} flagged"
