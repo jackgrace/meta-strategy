@@ -330,19 +330,14 @@ def analyze_early_fatigue(
             cooldown_active=ad_key in cooldowns,
         ))
 
-        # Persistence check: was this ad flagged yesterday at the same tier?
-        yesterday = yesterday_flags.get(ad_key, {})
-        yesterday_tier1 = yesterday.get("tier1", False)
-        yesterday_tier2 = yesterday.get("tier2", False)
-
-        # Determine highest tier that passes persistence
+        # Determine highest tier breaching
         active_tier = 0
         breaching = []
 
-        if tier2_flag and yesterday_tier2:
+        if tier2_flag:
             active_tier = 2
             breaching = tier2_breaches + tier1_breaches
-        elif tier1_flag and yesterday_tier1:
+        elif tier1_flag:
             active_tier = 1
             breaching = tier1_breaches
 
