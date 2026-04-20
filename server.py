@@ -95,11 +95,11 @@ class TriggerHandler(BaseHTTPRequestHandler):
 
 
 def _run_daily_scheduler():
-    """Background thread: runs both reports daily at 9am AEST."""
+    """Background thread: runs both reports daily at 1am AEST."""
     while True:
         now = datetime.now(AEST)
-        # Next 9am AEST
-        next_run = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        # Next 1am AEST
+        next_run = now.replace(hour=1, minute=0, second=0, microsecond=0)
         if next_run <= now:
             next_run += timedelta(days=1)
         wait_seconds = (next_run - now).total_seconds()
