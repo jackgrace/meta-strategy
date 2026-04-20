@@ -134,6 +134,8 @@ def fetch_ad_insights(config: Config) -> list[AdDayMetrics]:
                     logger.warning(f"Meta API returned {resp.status_code}, retrying in {wait}s (attempt {attempt + 1}/4)")
                     time.sleep(wait)
                     continue
+                if not resp.ok:
+                    logger.error(f"Meta API error {resp.status_code}: {resp.text[:500]}")
                 resp.raise_for_status()
                 break
             except requests.exceptions.Timeout:
