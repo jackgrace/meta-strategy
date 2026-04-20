@@ -193,14 +193,52 @@ def fetch_ad_insights(config: Config) -> list[AdDayMetrics]:
     return all_metrics
 
 
-def fetch_ad_statuses(config: Config) -> dict[str, str]:
+def fetch_ad_statuses(config: Config, ad_ids: set[str] | None = None) -> dict[str, str]:
     """
-    Fetch the effective_status for every ad in the account.
+    Fetch effective_status for ads. If ad_ids is provided, fetches only
+    those specific ads (much faster than fetching all 10k+ ads).
     Returns a dict mapping ad_id -> effective_status.
-
-    Status values include: ACTIVE, PAUSED, DELETED, PENDING_REVIEW,
-    DISAPPROVED, CAMPAIGN_PAUSED, ADSET_PAUSED, ARCHIVED, etc.
     """
+    statuses: dict[str, str] = {}
+
+    if ad_ids:
+        # Batch lookup: fetch status for specific ads (50 at a time via /?ids=)
+        id_list = list(ad_ids)
+        batch_size = 50
+        for i in range(0, len(id_list), batch_size):
+            batch = id_list[i:i + batch_size]
+            url = f"{API_BASE}/"
+            params = {
+                "access_token": config.meta_access_token,
+                "ids": ",".join(batch),
+                "fields": "effective_status",
+            }
+
+            resp = None
+            for attempt in range(4):
+                try:
+                    resp = requests.get(url, params=params, timeout=60)
+                    if resp.status_code in (403, 500, 502, 503, 504) and attempt < 3:
+                        time.sleep(2 ** (attempt + 1))
+                        continue
+                    if not resp.ok:
+                        logger.error(f"Batch status error {resp.status_code}: {resp.text[:300]}")
+                    resp.raise_for_status()
+                    break
+                except requests.exceptions.Timeout:
+                    if attempt < 3:
+                        time.sleep(2 ** (attempt + 1))
+                    else:
+                        raise
+
+            data = resp.json()
+            for ad_id_key, ad_data in data.items():
+                statuses[ad_id_key] = ad_data.get("effective_status", "UNKNOWN")
+
+        logger.info(f"Fetched effective_status for {len(statuses)} ads ({len(id_list)} requested)")
+        return statuses
+
+    # Fallback: fetch all ads in account (slow but complete)
     url = f"{API_BASE}/{config.meta_ad_account_id}/ads"
     params = {
         "access_token": config.meta_access_token,

@@ -39,9 +39,11 @@ def run_check() -> dict:
         logger.warning("No ad data returned from Meta API")
         return {"status": "ok", "message": "No ad data returned"}
 
-    logger.info("Fetching ad statuses from /ads endpoint...")
+    # Fetch ad statuses (only for ads we have insights data for)
+    logger.info("Fetching ad statuses...")
+    ad_ids = {m.ad_id for m in metrics}
     try:
-        ad_statuses = fetch_ad_statuses(config)
+        ad_statuses = fetch_ad_statuses(config, ad_ids=ad_ids)
     except Exception as e:
         logger.error(f"Failed to fetch ad statuses: {e}")
         ad_statuses = {}
