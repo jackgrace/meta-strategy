@@ -480,7 +480,7 @@ def send_testing_missed_opps(reports: list[TestingAdReport], config: Config) -> 
         return False
 
 
-def build_early_fatigue_message(alerts: list[EarlyFatigueAd]) -> dict | None:
+def build_early_fatigue_message(alerts: list[FatigueAlert]) -> dict | None:
     """Build per-market Slack digest for early fatigue signals."""
     if not alerts:
         return None
