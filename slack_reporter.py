@@ -10,6 +10,7 @@ import requests
 
 from fatigue_analyzer import AdFatigueReport
 from testing_analyzer import TestingAdReport
+from early_fatigue import EarlyFatigueAd
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -476,6 +477,154 @@ def send_testing_missed_opps(reports: list[TestingAdReport], config: Config) -> 
         return True
     except requests.RequestException as e:
         logger.error(f"Failed to send testing missed opportunities report: {e}")
+        return False
+
+
+def build_early_fatigue_message(alerts: list[EarlyFatigueAd]) -> dict | None:
+    """Build per-market Slack digest for early fatigue signals."""
+    if not alerts:
+        return None
+
+    now = datetime.now().strftime("%a %d %b %Y")
+
+    # Group by market, then by tier
+    by_market: dict[str, dict[int, list]] = {}
+    for a in alerts:
+        if a.market not in by_market:
+            by_market[a.market] = {1: [], 2: []}
+        by_market[a.market][a.tier].append(a)
+
+    blocks = []
+
+    blocks.append({
+        "type": "header",
+        "text": {"type": "plain_text", "text": f"🔥 Early Fatigue Signals — {now}"}
+    })
+
+    total_watch = sum(1 for a in alerts if a.tier == 1)
+    total_act = sum(1 for a in alerts if a.tier == 2)
+    blocks.append({
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": (
+            f"*{len(alerts)} ads* across *{len(by_market)} markets* showing fatigue signals\n"
+            f"🟡 {total_watch} WATCH (leading) │ 🔴 {total_act} ACT (lagging)\n"
+            f"_Baseline: prior 14 days │ Recent: last 3 days │ 2-day persistence required_"
+        )}
+    })
+
+    blocks.append({"type": "divider"})
+
+    # Cap total ads displayed to stay within Slack block limits
+    ads_shown = 0
+    MAX_ADS = 25
+
+    for market in sorted(by_market.keys()):
+        tiers = by_market[market]
+        act_ads = tiers[2]
+        watch_ads = tiers[1]
+
+        if not act_ads and not watch_ads:
+            continue
+
+        # Market header
+        market_summary_parts = []
+        if act_ads:
+            market_summary_parts.append(f"🔴 {len(act_ads)} ACT")
+        if watch_ads:
+            market_summary_parts.append(f"🟡 {len(watch_ads)} WATCH")
+
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*{market}* — {' │ '.join(market_summary_parts)}"}
+        })
+
+        # ACT ads first (more urgent)
+        for a in act_ads:
+            if ads_shown >= MAX_ADS:
+                break
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": _format_fatigue_ad(a)}
+            })
+            ads_shown += 1
+
+        # Then WATCH ads
+        for a in watch_ads:
+            if ads_shown >= MAX_ADS:
+                break
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": _format_fatigue_ad(a)}
+            })
+            ads_shown += 1
+
+        blocks.append({"type": "divider"})
+
+    overflow = len(alerts) - ads_shown
+    if overflow > 0:
+        blocks.append({
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": f"_+{overflow} more ads not shown_"}]
+        })
+
+    return {"blocks": blocks}
+
+
+def _format_fatigue_ad(a) -> str:
+    """Format a single fatigue alert ad for Slack."""
+    tier_emoji = "🔴" if a.tier == 2 else "🟡"
+    tier_label = "ACT" if a.tier == 2 else "WATCH"
+
+    status_parts = []
+    if a.is_escalation:
+        status_parts.append("⬆️ ESCALATED")
+    if a.is_repeat:
+        status_parts.append("🔁 still fatiguing")
+    if a.budget_adjusted:
+        status_parts.append("💰 budget changed >50%")
+    status_text = f" │ {' │ '.join(status_parts)}" if status_parts else ""
+
+    breaching_text = " │ ".join(a.breaching_metrics)
+
+    lines = [
+        f"{tier_emoji} *{a.ad_name}* — {tier_label}{status_text}",
+        f"Campaign: `{a.campaign_name}`",
+        f"Spend: {_format_currency(a.recent_daily_spend)}/day (baseline: {_format_currency(a.baseline_daily_spend)}/day)",
+        f"*14d baseline:* ROAS: {a.baseline_roas:.2f}x │ CPA: {_format_currency(a.baseline_cpa)} │ CTR: {a.baseline_ctr:.2f}% │ CPC: {_format_currency(a.baseline_cpc)}",
+        f"*Last 3d:*     ROAS: {a.recent_roas:.2f}x │ CPA: {_format_currency(a.recent_cpa)} │ CTR: {a.recent_ctr:.2f}% │ CPC: {_format_currency(a.recent_cpc)}",
+        f"Breaching: {breaching_text}",
+    ]
+
+    if a.days_since_first_flagged > 0:
+        lines.append(f"First flagged {a.days_since_first_flagged} days ago")
+
+    return "\n".join(lines)
+
+
+def send_early_fatigue_report(alerts: list, config: Config) -> bool:
+    """Send the early fatigue Slack digest."""
+    payload = build_early_fatigue_message(alerts)
+
+    if payload is None:
+        logger.info("No early fatigue alerts — skipping")
+        return True
+
+    try:
+        resp = requests.post(
+            config.slack_webhook_url,
+            json=payload,
+            timeout=10,
+        )
+        if not resp.ok:
+            logger.error(
+                f"Slack rejected fatigue report: {resp.status_code} — "
+                f"body: {resp.text[:500]} │ blocks: {len(payload.get('blocks', []))}"
+            )
+            return False
+        logger.info(f"Early fatigue report sent ({len(payload.get('blocks', []))} blocks, {len(alerts)} alerts)")
+        return True
+    except requests.RequestException as e:
+        logger.error(f"Failed to send early fatigue report: {e}")
         return False
 
 

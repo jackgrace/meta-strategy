@@ -57,7 +57,7 @@ class TriggerHandler(BaseHTTPRequestHandler):
                 return
 
         # Respond immediately (Slack requires <3s response)
-        self._respond_text(200, "Running fatigue check now... results will be posted to the channel shortly.")
+        self._respond_text(200, "Running checks now... results will be posted shortly.")
 
         # Run the check in a background thread
         threading.Thread(target=self._run_check_async, args=("slack",), daemon=True).start()
@@ -95,16 +95,18 @@ class TriggerHandler(BaseHTTPRequestHandler):
 
 
 def _run_daily_scheduler():
-    """Background thread: runs the check daily at midnight AEST."""
+    """Background thread: runs both reports daily at 9am AEST."""
     while True:
         now = datetime.now(AEST)
-        # Next midnight AEST
-        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        wait_seconds = (tomorrow - now).total_seconds()
-        logger.info(f"Scheduler: next run at {tomorrow.isoformat()} ({wait_seconds:.0f}s from now)")
+        # Next 9am AEST
+        next_run = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        if next_run <= now:
+            next_run += timedelta(days=1)
+        wait_seconds = (next_run - now).total_seconds()
+        logger.info(f"Scheduler: next run at {next_run.isoformat()} ({wait_seconds:.0f}s from now)")
         time.sleep(wait_seconds)
 
-        logger.info("Scheduler: running daily fatigue check")
+        logger.info("Scheduler: running daily checks")
         try:
             run_check()
         except Exception as e:

@@ -129,7 +129,7 @@ def fetch_ad_insights(config: Config) -> list[AdDayMetrics]:
         for attempt in range(4):
             try:
                 resp = requests.get(url, params=params if page_count == 1 else None, timeout=60)
-                if resp.status_code in (500, 502, 503, 504) and attempt < 3:
+                if resp.status_code in (403, 500, 502, 503, 504) and attempt < 3:
                     wait = 2 ** (attempt + 1)  # 2s, 4s, 8s
                     logger.warning(f"Meta API returned {resp.status_code}, retrying in {wait}s (attempt {attempt + 1}/4)")
                     time.sleep(wait)
