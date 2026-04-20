@@ -10,7 +10,7 @@ import requests
 
 from fatigue_analyzer import AdFatigueReport
 from testing_analyzer import TestingAdReport
-from early_fatigue import EarlyFatigueAd
+from early_fatigue import FatigueAlert
 from config import Config
 
 logger = logging.getLogger(__name__)
