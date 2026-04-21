@@ -269,16 +269,26 @@ def analyze_early_fatigue(
 
         evaluated += 1
 
-        # Calculate metrics
-        b_ctr = _avg(baseline, "ctr")
-        b_cpc = _avg(baseline, "cpc")
-        b_roas = _avg(baseline, "roas")
-        b_cpa = _avg(baseline, "cpa")
+        # Calculate weighted metrics (matches Ads Manager)
+        b_clicks = sum(d.clicks for d in baseline)
+        b_impressions = sum(d.impressions for d in baseline)
+        b_purchases = sum(d.purchases for d in baseline)
+        b_revenue = sum(d.revenue for d in baseline)
 
-        r_ctr = _avg(recent, "ctr")
-        r_cpc = _avg(recent, "cpc")
-        r_roas = _avg(recent, "roas")
-        r_cpa = _avg(recent, "cpa")
+        r_clicks = sum(d.clicks for d in recent)
+        r_impressions = sum(d.impressions for d in recent)
+        r_purchases = sum(d.purchases for d in recent)
+        r_revenue = sum(d.revenue for d in recent)
+
+        b_ctr = (b_clicks / b_impressions * 100) if b_impressions > 0 else 0
+        b_cpc = (baseline_spend / b_clicks) if b_clicks > 0 else 0
+        b_roas = (b_revenue / baseline_spend) if baseline_spend > 0 else 0
+        b_cpa = (baseline_spend / b_purchases) if b_purchases > 0 else 0
+
+        r_ctr = (r_clicks / r_impressions * 100) if r_impressions > 0 else 0
+        r_cpc = (recent_spend / r_clicks) if r_clicks > 0 else 0
+        r_roas = (r_revenue / recent_spend) if recent_spend > 0 else 0
+        r_cpa = (recent_spend / r_purchases) if r_purchases > 0 else 0
 
         ctr_delta = _pct_change(b_ctr, r_ctr)
         cpc_delta = _pct_change(b_cpc, r_cpc)
@@ -295,9 +305,8 @@ def analyze_early_fatigue(
 
         # Tier 2 — ACT (lagging indicators)
         # Gate 3: need ≥2 purchases in recent window for ROAS/CPA checks
-        recent_purchases = sum(d.purchases for d in recent)
         tier2_breaches = []
-        if recent_purchases >= MIN_RECENT_PURCHASES_FOR_ROAS:
+        if r_purchases >= MIN_RECENT_PURCHASES_FOR_ROAS:
             if roas_delta <= -TIER2_ROAS_DECLINE_PCT and b_roas > 0:
                 tier2_breaches.append(f"ROAS {roas_delta:+.0f}%")
             if cpa_delta >= TIER2_CPA_INCREASE_PCT and b_cpa > 0:
