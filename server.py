@@ -17,6 +17,8 @@ from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs
 
+import requests
+
 from main import run_check
 
 logger = logging.getLogger(__name__)
@@ -94,8 +96,25 @@ class TriggerHandler(BaseHTTPRequestHandler):
         logger.info(f"{self.client_address[0]} - {format % args}")
 
 
+def _send_failure_notification(error_msg: str):
+    """Send a Slack message when the daily run fails."""
+    webhook = os.environ.get("SLACK_WEBHOOK_URL")
+    if not webhook:
+        return
+    try:
+        now = datetime.now(AEST).strftime("%a %d %b %Y %H:%M AEST")
+        requests.post(webhook, json={
+            "blocks": [
+                {"type": "header", "text": {"type": "plain_text", "text": f"❌ Daily check failed — {now}"}},
+                {"type": "section", "text": {"type": "mrkdwn", "text": f"```{error_msg[:500]}```\nWill retry in 15 minutes."}},
+            ]
+        }, timeout=10)
+    except Exception:
+        pass
+
+
 def _run_daily_scheduler():
-    """Background thread: runs both reports daily at 1am AEST."""
+    """Background thread: runs both reports daily at 1am AEST. Retries once after 15 min on failure."""
     while True:
         now = datetime.now(AEST)
         # Next 1am AEST
@@ -111,6 +130,16 @@ def _run_daily_scheduler():
             run_check()
         except Exception as e:
             logger.error(f"Scheduled check failed: {e}")
+            _send_failure_notification(str(e))
+
+            # Retry once after 15 minutes
+            logger.info("Scheduler: retrying in 15 minutes...")
+            time.sleep(900)
+            logger.info("Scheduler: retry attempt")
+            try:
+                run_check()
+            except Exception as e2:
+                logger.error(f"Retry also failed: {e2}")
 
 
 def start_server():
