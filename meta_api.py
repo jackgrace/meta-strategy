@@ -124,24 +124,45 @@ def fetch_ad_insights(config: Config) -> list[AdDayMetrics]:
         page_count += 1
         logger.info(f"Fetching page {page_count} from Meta API...")
 
-        # Retry with exponential backoff for transient errors (500, 502, 503, 504)
+        # Retry with backoff for transient errors and rate limits
         resp = None
-        for attempt in range(4):
+        for attempt in range(5):
             try:
                 resp = requests.get(url, params=params if page_count == 1 else None, timeout=60)
-                if resp.status_code in (403, 500, 502, 503, 504) and attempt < 3:
-                    wait = [15, 30, 60][attempt]  # 15s, 30s, 60s for Meta transient errors
-                    logger.warning(f"Meta API returned {resp.status_code}, retrying in {wait}s (attempt {attempt + 1}/4)")
+
+                # Check if this is a retryable error
+                is_server_error = resp.status_code in (500, 502, 503, 504)
+                is_rate_limit = resp.status_code == 403
+                is_transient_400 = False
+
+                if resp.status_code == 400:
+                    try:
+                        err = resp.json().get("error", {})
+                        is_transient_400 = err.get("code") in (1, 2) or err.get("is_transient", False)
+                    except ValueError:
+                        pass
+
+                if (is_server_error or is_rate_limit or is_transient_400) and attempt < 4:
+                    if is_rate_limit:
+                        wait = [120, 180, 300, 300][attempt]
+                    else:
+                        wait = [15, 30, 60, 120][attempt]
+                    logger.warning(
+                        f"Meta API returned {resp.status_code} "
+                        f"{'(rate limit)' if is_rate_limit else '(transient)'}, "
+                        f"retrying in {wait}s (attempt {attempt + 1}/5)"
+                    )
                     time.sleep(wait)
                     continue
+
                 if not resp.ok:
                     logger.error(f"Meta API error {resp.status_code}: {resp.text[:500]}")
                 resp.raise_for_status()
                 break
             except requests.exceptions.Timeout:
-                if attempt < 3:
-                    wait = 2 ** (attempt + 1)
-                    logger.warning(f"Meta API timeout, retrying in {wait}s (attempt {attempt + 1}/4)")
+                if attempt < 4:
+                    wait = [15, 30, 60, 120][attempt]
+                    logger.warning(f"Meta API timeout, retrying in {wait}s (attempt {attempt + 1}/5)")
                     time.sleep(wait)
                 else:
                     raise
