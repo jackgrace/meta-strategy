@@ -222,7 +222,6 @@ def analyze_early_fatigue(
     log_entries: list[DailyLogEntry] = []
 
     skipped_not_active = 0
-    skipped_no_market = 0
     skipped_low_history = 0
     skipped_low_spend = 0
     evaluated = 0
@@ -236,11 +235,8 @@ def analyze_early_fatigue(
             skipped_not_active += 1
             continue
 
-        # Detect market
-        market = _detect_market(all_days[0].campaign_name)
-        if not market:
-            skipped_no_market += 1
-            continue
+        # Detect market (optional — used for grouping in Slack, not filtering)
+        market = _detect_market(all_days[0].campaign_name) or "OTHER"
 
         # Gate 1: ≥17 days of data
         if len(all_days) < MIN_ACTIVE_DAYS:
@@ -434,7 +430,7 @@ def analyze_early_fatigue(
 
     logger.info(
         f"Early fatigue: {len(ads)} total ads │ "
-        f"{skipped_not_active} not active │ {skipped_no_market} no market │ "
+        f"{skipped_not_active} not active │ "
         f"{skipped_low_history} low history │ {skipped_low_spend} low spend │ "
         f"{evaluated} evaluated │ {len(alerts)} alerts"
     )
