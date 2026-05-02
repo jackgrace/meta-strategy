@@ -518,7 +518,7 @@ def build_early_fatigue_message(alerts: list[FatigueAlert]) -> dict | None:
         "text": {"type": "mrkdwn", "text": (
             f"*{len(alerts)} ads* across *{len(by_market)} markets* │ "
             + " │ ".join(summary_parts) + "\n"
-            f"_SCALE campaigns │ Baseline: prior 14 days │ Recent: last 3 days_"
+            f"_SCALE campaigns │ Baseline: prior 3 days │ Recent: last 2 days_"
         )}
     })
 
@@ -593,8 +593,8 @@ def _format_fatigue_ad(a) -> str:
         f"{tier_emoji} *{a.ad_name}* — {tier_label}{status_text}",
         f"Campaign: `{a.campaign_name}`",
         f"Spend: {_format_currency(a.recent_daily_spend)}/day (baseline: {_format_currency(a.baseline_daily_spend)}/day)",
-        f"*14d baseline:* ROAS: {a.baseline_roas:.2f}x │ CPA: {_format_currency(a.baseline_cpa)} │ CTR: {a.baseline_ctr:.2f}% │ CPC: {_format_currency(a.baseline_cpc)}",
-        f"*Last 3d:*     ROAS: {a.recent_roas:.2f}x │ CPA: {_format_currency(a.recent_cpa)} │ CTR: {a.recent_ctr:.2f}% │ CPC: {_format_currency(a.recent_cpc)}",
+        f"*3d baseline:* ROAS: {a.baseline_roas:.2f}x │ CPA: {_format_currency(a.baseline_cpa)} │ CTR: {a.baseline_ctr:.2f}% │ CPC: {_format_currency(a.baseline_cpc)}",
+        f"*Last 2d:*    ROAS: {a.recent_roas:.2f}x │ CPA: {_format_currency(a.recent_cpa)} │ CTR: {a.recent_ctr:.2f}% │ CPC: {_format_currency(a.recent_cpc)}",
         f"Breaching: {breaching_text}",
     ]
 

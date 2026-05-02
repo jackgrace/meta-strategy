@@ -41,11 +41,11 @@ TOF_MIN_CTR_PERCENTILE = 0.5  # Above median CTR for evaluated ads
 TOF_MIN_CPC_PERCENTILE = 0.5  # Below median CPC for evaluated ads
 
 # Eligibility gates
-MIN_ACTIVE_DAYS = 17
-MIN_BASELINE_SPEND = 100.0  # 14-day total spend must exceed this
+MIN_ACTIVE_DAYS = 5
+MIN_BASELINE_SPEND = 100.0  # Baseline total spend must exceed this
 
-RECENT_DAYS = 3
-BASELINE_DAYS = 14
+RECENT_DAYS = 2
+BASELINE_DAYS = 3
 
 # Persistence
 CONSECUTIVE_DAYS_REQUIRED = 2
