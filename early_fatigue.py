@@ -297,7 +297,7 @@ def analyze_early_fatigue(
         recent = all_days[-RECENT_DAYS:]
         baseline = all_days[-(RECENT_DAYS + BASELINE_DAYS):-RECENT_DAYS]
 
-        if len(baseline) < 7:
+        if len(baseline) < BASELINE_DAYS:
             skipped_low_history += 1
             continue
 
