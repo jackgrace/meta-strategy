@@ -36,9 +36,7 @@ TIER2_CPA_INCREASE_PCT = 35
 
 # Eligibility gates
 MIN_ACTIVE_DAYS = 17
-MIN_RECENT_SPEND = 75.0
-MIN_RECENT_PURCHASES_FOR_ROAS = 2
-MIN_BASELINE_SPEND = 350.0
+MIN_BASELINE_SPEND = 100.0  # 14-day total spend must exceed this
 
 RECENT_DAYS = 3
 BASELINE_DAYS = 14
@@ -194,19 +192,20 @@ def analyze_early_fatigue(
 
     today_str = datetime.now(AEST).strftime("%Y-%m-%d")
 
-    # Filter to non-TESTING campaigns
-    non_testing = [
+    # Filter to SCALE campaigns, exclude ads with OFF in name
+    scale_metrics = [
         m for m in all_metrics
-        if config.testing_campaign_keyword.upper() not in m.campaign_name.upper()
+        if "SCALE" in m.campaign_name.upper()
+        and "OFF" not in m.ad_name.upper()
     ]
 
-    if not non_testing:
-        logger.info("No non-TESTING campaign data found")
+    if not scale_metrics:
+        logger.info("No SCALE campaign data found")
         return [], []
 
     # Group by ad
     ads: dict[str, list[AdDayMetrics]] = defaultdict(list)
-    for m in non_testing:
+    for m in scale_metrics:
         ads[m.ad_id].append(m)
 
     # Load persisted state
@@ -251,13 +250,8 @@ def analyze_early_fatigue(
             skipped_low_history += 1
             continue
 
-        # Gate 2: recent spend ≥ $75
+        # Spend gate: 14d baseline spend > $100
         recent_spend = sum(d.spend for d in recent)
-        if recent_spend < MIN_RECENT_SPEND:
-            skipped_low_spend += 1
-            continue
-
-        # Gate 4: baseline spend ≥ $350
         baseline_spend = sum(d.spend for d in baseline)
         if baseline_spend < MIN_BASELINE_SPEND:
             skipped_low_spend += 1
@@ -302,7 +296,7 @@ def analyze_early_fatigue(
         # Tier 2 — ACT (lagging indicators)
         # Gate 3: need ≥2 purchases in recent window for ROAS/CPA checks
         tier2_breaches = []
-        if r_purchases >= MIN_RECENT_PURCHASES_FOR_ROAS:
+        if r_purchases >= 2:
             if roas_delta <= -TIER2_ROAS_DECLINE_PCT and b_roas > 0:
                 tier2_breaches.append(f"ROAS {roas_delta:+.0f}%")
             if cpa_delta >= TIER2_CPA_INCREASE_PCT and b_cpa > 0:
@@ -429,9 +423,9 @@ def analyze_early_fatigue(
     _save_state(state)
 
     logger.info(
-        f"Early fatigue: {len(ads)} total ads │ "
+        f"Early fatigue (SCALE campaigns): {len(ads)} ads │ "
         f"{skipped_not_active} not active │ "
-        f"{skipped_low_history} low history │ {skipped_low_spend} low spend │ "
+        f"{skipped_low_history} low history │ {skipped_low_spend} low spend (<${MIN_BASELINE_SPEND:.0f}/14d) │ "
         f"{evaluated} evaluated │ {len(alerts)} alerts"
     )
 

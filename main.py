@@ -74,6 +74,40 @@ def run_check() -> dict:
     return results
 
 
+def run_fatigue_only() -> dict:
+    """Run ONLY the fatigue check (no testing report). For /fatigue endpoint."""
+    logger.info("=== Fatigue check starting ===")
+
+    config = Config.from_env()
+
+    logger.info("Fetching ad insights from Meta Marketing API...")
+    metrics = fetch_ad_insights(config)
+
+    if not metrics:
+        logger.warning("No ad data returned from Meta API")
+        return {"status": "ok", "message": "No ad data returned"}
+
+    logger.info("Fetching ad statuses...")
+    ad_ids = {m.ad_id for m in metrics}
+    try:
+        ad_statuses = fetch_ad_statuses(config, ad_ids=ad_ids)
+    except Exception as e:
+        logger.error(f"Failed to fetch ad statuses: {e}")
+        ad_statuses = {}
+
+    logger.info("--- Running Early Fatigue Signals ---")
+    fatigue_alerts, log_entries = analyze_early_fatigue(metrics, ad_statuses, config)
+    fatigue_ok = send_early_fatigue_report(fatigue_alerts, config)
+
+    logger.info(f"=== Complete: {len(fatigue_alerts)} fatigue alerts ===")
+
+    return {
+        "status": "ok" if fatigue_ok else "error",
+        "fatigue_alerts": len(fatigue_alerts),
+        "fatigue_sent": fatigue_ok,
+    }
+
+
 def main():
     try:
         result = run_check()

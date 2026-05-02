@@ -19,7 +19,7 @@ from urllib.parse import parse_qs
 
 import requests
 
-from main import run_check
+from main import run_check, run_fatigue_only
 
 logger = logging.getLogger(__name__)
 
@@ -33,24 +33,28 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(200, {"status": "ok", "time": datetime.now(AEST).isoformat()})
         elif self.path == "/run":
             self._run_check(source="http")
+        elif self.path == "/fatigue":
+            self._run_fatigue(source="http")
         else:
             self._respond(404, {"error": "not found"})
 
     def do_POST(self):
         if self.path == "/slack/trigger":
-            self._handle_slack()
+            self._handle_slack(run_check, "Running all checks now...")
+        elif self.path == "/slack/fatigue":
+            self._handle_slack(run_fatigue_only, "Running fatigue check now...")
         elif self.path == "/run":
             self._run_check(source="http")
+        elif self.path == "/fatigue":
+            self._run_fatigue(source="http")
         else:
             self._respond(404, {"error": "not found"})
 
-    def _handle_slack(self):
-        # Slack slash commands send application/x-www-form-urlencoded
+    def _handle_slack(self, check_fn, ack_message: str):
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length).decode()
         params = parse_qs(body)
 
-        # Verify token if configured (optional but recommended)
         expected_token = os.environ.get("SLACK_SLASH_TOKEN")
         if expected_token:
             received_token = params.get("token", [""])[0]
@@ -58,14 +62,11 @@ class TriggerHandler(BaseHTTPRequestHandler):
                 self._respond(403, {"error": "invalid token"})
                 return
 
-        # Respond immediately (Slack requires <3s response)
-        self._respond_text(200, "Running checks now... results will be posted shortly.")
-
-        # Run the check in a background thread
-        threading.Thread(target=self._run_check_async, args=("slack",), daemon=True).start()
+        self._respond_text(200, ack_message)
+        threading.Thread(target=self._run_async, args=(check_fn, "slack"), daemon=True).start()
 
     def _run_check(self, source: str):
-        logger.info(f"Manual trigger via {source}")
+        logger.info(f"Manual trigger via {source} — all checks")
         try:
             result = run_check()
             self._respond(200, result)
@@ -73,10 +74,19 @@ class TriggerHandler(BaseHTTPRequestHandler):
             logger.error(f"Check failed: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
 
-    def _run_check_async(self, source: str):
+    def _run_fatigue(self, source: str):
+        logger.info(f"Manual trigger via {source} — fatigue only")
+        try:
+            result = run_fatigue_only()
+            self._respond(200, result)
+        except Exception as e:
+            logger.error(f"Fatigue check failed: {e}")
+            self._respond(500, {"status": "error", "message": str(e)})
+
+    def _run_async(self, check_fn, source: str):
         logger.info(f"Async trigger via {source}")
         try:
-            run_check()
+            check_fn()
         except Exception as e:
             logger.error(f"Async check failed: {e}")
 
@@ -152,8 +162,10 @@ def start_server():
 
     server = HTTPServer(("0.0.0.0", port), TriggerHandler)
     logger.info(f"Server listening on port {port}")
-    logger.info(f"  GET  /run           — manual trigger")
-    logger.info(f"  POST /slack/trigger  — Slack slash command")
+    logger.info(f"  GET  /run            — run all checks")
+    logger.info(f"  GET  /fatigue        — fatigue check only")
+    logger.info(f"  POST /slack/trigger  — Slack: all checks")
+    logger.info(f"  POST /slack/fatigue  — Slack: fatigue only")
     logger.info(f"  GET  /health         — health check")
     server.serve_forever()
 
