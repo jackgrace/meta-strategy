@@ -491,7 +491,7 @@ def build_early_fatigue_message(alerts: list[FatigueAlert]) -> dict | None:
     by_market: dict[str, dict[int, list]] = {}
     for a in alerts:
         if a.market not in by_market:
-            by_market[a.market] = {1: [], 2: []}
+            by_market[a.market] = {1: [], 2: [], 3: []}
         by_market[a.market][a.tier].append(a)
 
     blocks = []
@@ -503,12 +503,22 @@ def build_early_fatigue_message(alerts: list[FatigueAlert]) -> dict | None:
 
     total_watch = sum(1 for a in alerts if a.tier == 1)
     total_act = sum(1 for a in alerts if a.tier == 2)
+    total_tof = sum(1 for a in alerts if a.tier == 3)
+
+    summary_parts = []
+    if total_act:
+        summary_parts.append(f"🔴 {total_act} ACT")
+    if total_watch:
+        summary_parts.append(f"🟡 {total_watch} WATCH")
+    if total_tof:
+        summary_parts.append(f"ℹ️ {total_tof} TOF (monitor)")
+
     blocks.append({
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
-            f"*{len(alerts)} ads* across *{len(by_market)} markets* showing fatigue signals\n"
-            f"🟡 {total_watch} WATCH (leading) │ 🔴 {total_act} ACT (lagging)\n"
-            f"_Baseline: prior 14 days │ Recent: last 3 days │ 2-day persistence required_"
+            f"*{len(alerts)} ads* across *{len(by_market)} markets* │ "
+            + " │ ".join(summary_parts) + "\n"
+            f"_SCALE campaigns │ Baseline: prior 14 days │ Recent: last 3 days_"
         )}
     })
 
@@ -522,8 +532,9 @@ def build_early_fatigue_message(alerts: list[FatigueAlert]) -> dict | None:
         tiers = by_market[market]
         act_ads = tiers[2]
         watch_ads = tiers[1]
+        tof_ads = tiers.get(3, [])
 
-        if not act_ads and not watch_ads:
+        if not act_ads and not watch_ads and not tof_ads:
             continue
 
         # Market header
@@ -532,24 +543,16 @@ def build_early_fatigue_message(alerts: list[FatigueAlert]) -> dict | None:
             market_summary_parts.append(f"🔴 {len(act_ads)} ACT")
         if watch_ads:
             market_summary_parts.append(f"🟡 {len(watch_ads)} WATCH")
+        if tof_ads:
+            market_summary_parts.append(f"ℹ️ {len(tof_ads)} TOF")
 
         blocks.append({
             "type": "section",
             "text": {"type": "mrkdwn", "text": f"*{market}* — {' │ '.join(market_summary_parts)}"}
         })
 
-        # ACT ads first (more urgent)
-        for a in act_ads:
-            if ads_shown >= MAX_ADS:
-                break
-            blocks.append({
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": _format_fatigue_ad(a)}
-            })
-            ads_shown += 1
-
-        # Then WATCH ads
-        for a in watch_ads:
+        # ACT ads first, then WATCH, then TOF
+        for a in act_ads + watch_ads + tof_ads:
             if ads_shown >= MAX_ADS:
                 break
             blocks.append({
@@ -572,8 +575,8 @@ def build_early_fatigue_message(alerts: list[FatigueAlert]) -> dict | None:
 
 def _format_fatigue_ad(a) -> str:
     """Format a single fatigue alert ad for Slack."""
-    tier_emoji = "🔴" if a.tier == 2 else "🟡"
-    tier_label = "ACT" if a.tier == 2 else "WATCH"
+    tier_map = {1: ("🟡", "WATCH"), 2: ("🔴", "ACT"), 3: ("ℹ️", "TOF — monitor only")}
+    tier_emoji, tier_label = tier_map.get(a.tier, ("❓", "UNKNOWN"))
 
     status_parts = []
     if a.is_escalation:
@@ -594,6 +597,10 @@ def _format_fatigue_ad(a) -> str:
         f"*Last 3d:*     ROAS: {a.recent_roas:.2f}x │ CPA: {_format_currency(a.recent_cpa)} │ CTR: {a.recent_ctr:.2f}% │ CPC: {_format_currency(a.recent_cpc)}",
         f"Breaching: {breaching_text}",
     ]
+
+    if a.is_tof:
+        tof_text = " │ ".join(a.tof_signals)
+        lines.append(f"_Likely TOF role: {tof_text}_")
 
     if a.days_since_first_flagged > 0:
         lines.append(f"First flagged {a.days_since_first_flagged} days ago")

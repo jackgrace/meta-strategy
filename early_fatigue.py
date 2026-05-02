@@ -34,6 +34,12 @@ TIER1_CPC_INCREASE_PCT = 25
 TIER2_ROAS_DECLINE_PCT = 30
 TIER2_CPA_INCREASE_PCT = 35
 
+# TOF detection — if an ad matches 2+ of these, it's likely top-of-funnel
+# and low ROAS is expected (ASC uses it for prospecting/audience building)
+TOF_MAX_FREQUENCY = 1.5
+TOF_MIN_CTR_PERCENTILE = 0.5  # Above median CTR for evaluated ads
+TOF_MIN_CPC_PERCENTILE = 0.5  # Below median CPC for evaluated ads
+
 # Eligibility gates
 MIN_ACTIVE_DAYS = 17
 MIN_BASELINE_SPEND = 100.0  # 14-day total spend must exceed this
@@ -86,6 +92,8 @@ class FatigueAlert:
 
     # Edge case flags
     budget_adjusted: bool = False
+    is_tof: bool = False  # Likely top-of-funnel — low ROAS expected
+    tof_signals: list[str] = field(default_factory=list)  # Why we think it's TOF
 
 
 @dataclass
@@ -225,24 +233,26 @@ def analyze_early_fatigue(
     skipped_low_spend = 0
     evaluated = 0
 
+    # First pass: collect recent CPC/CTR/frequency for all eligible ads
+    # so we can compute medians for TOF detection
+    eligible_recent_cpcs = []
+    eligible_recent_ctrs = []
+    eligible_ads_data: list[tuple] = []  # (ad_id, all_days, market, recent, baseline, recent_spend, baseline_spend)
+
     for ad_id, all_days in ads.items():
         all_days.sort(key=lambda d: d.date)
 
-        # Only evaluate ACTIVE ads
         status = ad_statuses.get(ad_id, "UNKNOWN")
         if status != "ACTIVE":
             skipped_not_active += 1
             continue
 
-        # Detect market (optional — used for grouping in Slack, not filtering)
         market = _detect_market(all_days[0].campaign_name) or "OTHER"
 
-        # Gate 1: ≥17 days of data
         if len(all_days) < MIN_ACTIVE_DAYS:
             skipped_low_history += 1
             continue
 
-        # Split windows (no overlap)
         recent = all_days[-RECENT_DAYS:]
         baseline = all_days[-(RECENT_DAYS + BASELINE_DAYS):-RECENT_DAYS]
 
@@ -250,12 +260,33 @@ def analyze_early_fatigue(
             skipped_low_history += 1
             continue
 
-        # Spend gate: 14d baseline spend > $100
         recent_spend = sum(d.spend for d in recent)
         baseline_spend = sum(d.spend for d in baseline)
         if baseline_spend < MIN_BASELINE_SPEND:
             skipped_low_spend += 1
             continue
+
+        # Collect for median calculation
+        r_clicks = sum(d.clicks for d in recent)
+        r_impressions = sum(d.impressions for d in recent)
+        if r_clicks > 0:
+            eligible_recent_cpcs.append(recent_spend / r_clicks)
+        if r_impressions > 0:
+            eligible_recent_ctrs.append(r_clicks / r_impressions * 100)
+
+        eligible_ads_data.append((ad_id, all_days, market, recent, baseline, recent_spend, baseline_spend))
+
+    # Compute medians for TOF detection
+    eligible_recent_cpcs.sort()
+    eligible_recent_ctrs.sort()
+    median_cpc = eligible_recent_cpcs[len(eligible_recent_cpcs) // 2] if eligible_recent_cpcs else 0
+    median_ctr = eligible_recent_ctrs[len(eligible_recent_ctrs) // 2] if eligible_recent_ctrs else 0
+
+    if median_cpc > 0:
+        logger.info(f"TOF detection medians: CPC=${median_cpc:.2f}, CTR={median_ctr:.2f}%")
+
+    # Second pass: evaluate each ad
+    for ad_id, all_days, market, recent, baseline, recent_spend, baseline_spend in eligible_ads_data:
 
         evaluated += 1
 
@@ -329,13 +360,35 @@ def analyze_early_fatigue(
             cooldown_active=ad_key in cooldowns,
         ))
 
+        # TOF detection: check if this ad looks like top-of-funnel
+        # Low CPC + low frequency + high CTR = prospecting ad, low ROAS expected
+        tof_signals = []
+        r_frequency = _avg(recent, "frequency")
+        r_atc_total = sum(d.add_to_carts for d in recent)
+
+        if r_cpc > 0 and r_cpc < median_cpc:
+            tof_signals.append(f"CPC ${r_cpc:.2f} below median ${median_cpc:.2f}")
+        if r_frequency < TOF_MAX_FREQUENCY:
+            tof_signals.append(f"Freq {r_frequency:.1f} (reaching new users)")
+        if r_ctr > median_ctr and median_ctr > 0:
+            tof_signals.append(f"CTR {r_ctr:.2f}% above median {median_ctr:.2f}%")
+        if r_atc_total > 0:
+            tof_signals.append(f"{r_atc_total} ATCs in 3d")
+
+        is_tof = len(tof_signals) >= 2
+
         # Determine highest tier breaching
         active_tier = 0
         breaching = []
 
         if tier2_flag:
-            active_tier = 2
-            breaching = tier2_breaches + tier1_breaches
+            if is_tof:
+                # Downgrade ACT → info tier (tier 3) for TOF ads
+                active_tier = 3
+                breaching = tier2_breaches + tier1_breaches
+            else:
+                active_tier = 2
+                breaching = tier2_breaches + tier1_breaches
         elif tier1_flag:
             active_tier = 1
             breaching = tier1_breaches
@@ -396,6 +449,8 @@ def analyze_early_fatigue(
             recent_cpa=r_cpa,
             breaching_metrics=breaching,
             budget_adjusted=budget_adjusted,
+            is_tof=is_tof,
+            tof_signals=tof_signals if is_tof else [],
         )
         alerts.append(alert)
 
