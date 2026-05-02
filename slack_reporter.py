@@ -592,11 +592,21 @@ def _format_fatigue_ad(a) -> str:
     lines = [
         f"{tier_emoji} *{a.ad_name}* — {tier_label}{status_text}",
         f"Campaign: `{a.campaign_name}`",
-        f"Spend: {_format_currency(a.recent_daily_spend)}/day (baseline: {_format_currency(a.baseline_daily_spend)}/day)",
-        f"*Prior 4d:*  ROAS: {a.baseline_roas:.2f}x │ CPA: {_format_currency(a.baseline_cpa)} │ CTR: {a.baseline_ctr:.2f}% │ CPC: {_format_currency(a.baseline_cpc)}",
-        f"*Last 3d:*   ROAS: {a.recent_roas:.2f}x │ CPA: {_format_currency(a.recent_cpa)} │ CTR: {a.recent_ctr:.2f}% │ CPC: {_format_currency(a.recent_cpc)}",
-        f"Breaching: {breaching_text}",
     ]
+
+    # 4 time windows
+    for w in a.windows:
+        if w.days_available < 2:
+            continue
+        cpa_str = _format_currency(w.cpa) if w.cpa > 0 else "—"
+        lines.append(
+            f"*{w.label}:* ROAS: {w.roas:.2f}x │ CPA: {cpa_str} │ CTR: {w.ctr:.2f}% │ CPC: {_format_currency(w.cpc)} │ Spend: {_format_currency(w.spend)}"
+        )
+
+    lines.append(f"Breaching (4d→3d): {breaching_text}")
+
+    if a.sustained_decline:
+        lines.append("📉 _Sustained decline across all windows_")
 
     if a.is_tof:
         tof_text = " │ ".join(a.tof_signals)

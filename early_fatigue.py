@@ -56,6 +56,19 @@ STATE_FILE = os.path.join(STATE_DIR, "fatigue_state.json")
 
 
 @dataclass
+class WindowMetrics:
+    """Weighted metrics for a single time window."""
+    label: str  # "30d", "14d", "7d", "3d"
+    days_available: int
+    roas: float
+    cpa: float
+    ctr: float
+    cpc: float
+    spend: float
+    purchases: int
+
+
+@dataclass
 class FatigueAlert:
     """A single ad flagged for fatigue."""
     ad_id: str
@@ -63,37 +76,30 @@ class FatigueAlert:
     campaign_name: str
     adset_name: str
     market: str
-    tier: int  # 1 = WATCH, 2 = ACT
-    is_escalation: bool  # True if just escalated from tier 1 → 2
-    is_repeat: bool  # True if "still fatiguing" after cooldown expired
+    tier: int  # 1 = WATCH, 2 = ACT, 3 = TOF info
+    is_escalation: bool
+    is_repeat: bool
     days_since_first_flagged: int
+    days_of_data: int
 
-    # Spend
-    recent_daily_spend: float
-    baseline_daily_spend: float
+    # 4 time windows (30d, 14d, 7d, 3d)
+    windows: list[WindowMetrics] = field(default_factory=list)
 
-    # Deltas
-    ctr_delta_pct: float
-    cpc_delta_pct: float
-    roas_delta_pct: float
-    cpa_delta_pct: float
+    # Deltas (4d baseline vs 3d recent — used for tier detection)
+    ctr_delta_pct: float = 0
+    cpc_delta_pct: float = 0
+    roas_delta_pct: float = 0
+    cpa_delta_pct: float = 0
 
-    # Baseline vs recent values
-    baseline_ctr: float
-    recent_ctr: float
-    baseline_cpc: float
-    recent_cpc: float
-    baseline_roas: float
-    recent_roas: float
-    baseline_cpa: float
-    recent_cpa: float
+    # Whether all windows show consistent decline
+    sustained_decline: bool = False
 
     breaching_metrics: list[str] = field(default_factory=list)
 
     # Edge case flags
     budget_adjusted: bool = False
-    is_tof: bool = False  # Likely top-of-funnel — low ROAS expected
-    tof_signals: list[str] = field(default_factory=list)  # Why we think it's TOF
+    is_tof: bool = False
+    tof_signals: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -150,6 +156,41 @@ def _save_state(state: dict):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
     logger.info(f"State saved ({len(state.get('ad_flags', {}))} ad flags tracked)")
+
+
+WINDOW_SIZES = [30, 14, 7, 3]
+
+
+def _compute_window(days: list, label: str) -> WindowMetrics:
+    """Compute weighted metrics for a time window."""
+    total_spend = sum(d.spend for d in days)
+    total_clicks = sum(d.clicks for d in days)
+    total_impressions = sum(d.impressions for d in days)
+    total_purchases = sum(d.purchases for d in days)
+    total_revenue = sum(d.revenue for d in days)
+
+    return WindowMetrics(
+        label=label,
+        days_available=len(days),
+        roas=(total_revenue / total_spend) if total_spend > 0 else 0,
+        cpa=(total_spend / total_purchases) if total_purchases > 0 else 0,
+        ctr=(total_clicks / total_impressions * 100) if total_impressions > 0 else 0,
+        cpc=(total_spend / total_clicks) if total_clicks > 0 else 0,
+        spend=total_spend,
+        purchases=total_purchases,
+    )
+
+
+def _check_sustained_decline(windows: list[WindowMetrics]) -> bool:
+    """Check if ROAS is declining across all available windows (30d→14d→7d→3d)."""
+    roas_values = [w.roas for w in windows if w.days_available >= 2 and w.roas > 0]
+    if len(roas_values) < 3:
+        return False
+    # Each window should be lower than the previous (wider) window
+    for i in range(1, len(roas_values)):
+        if roas_values[i] >= roas_values[i - 1]:
+            return False
+    return True
 
 
 def _check_promo_blackout(config: Config) -> bool:
@@ -290,26 +331,24 @@ def analyze_early_fatigue(
 
         evaluated += 1
 
-        # Calculate weighted metrics (matches Ads Manager)
-        b_clicks = sum(d.clicks for d in baseline)
-        b_impressions = sum(d.impressions for d in baseline)
-        b_purchases = sum(d.purchases for d in baseline)
-        b_revenue = sum(d.revenue for d in baseline)
+        # Compute all 4 time windows
+        windows = []
+        for size in WINDOW_SIZES:
+            window_days = all_days[-size:] if len(all_days) >= size else all_days
+            w = _compute_window(window_days, f"{size}d")
+            w.days_available = min(len(all_days), size)
+            windows.append(w)
 
-        r_clicks = sum(d.clicks for d in recent)
-        r_impressions = sum(d.impressions for d in recent)
-        r_purchases = sum(d.purchases for d in recent)
-        r_revenue = sum(d.revenue for d in recent)
+        # Sustained decline check (ROAS declining across all windows)
+        sustained = _check_sustained_decline(windows)
 
-        b_ctr = (b_clicks / b_impressions * 100) if b_impressions > 0 else 0
-        b_cpc = (baseline_spend / b_clicks) if b_clicks > 0 else 0
-        b_roas = (b_revenue / baseline_spend) if baseline_spend > 0 else 0
-        b_cpa = (baseline_spend / b_purchases) if b_purchases > 0 else 0
+        # For tier detection, use 4d baseline vs 3d recent (existing logic)
+        w_baseline = _compute_window(baseline, "baseline")
+        w_recent = _compute_window(recent, "recent")
 
-        r_ctr = (r_clicks / r_impressions * 100) if r_impressions > 0 else 0
-        r_cpc = (recent_spend / r_clicks) if r_clicks > 0 else 0
-        r_roas = (r_revenue / recent_spend) if recent_spend > 0 else 0
-        r_cpa = (recent_spend / r_purchases) if r_purchases > 0 else 0
+        b_ctr, b_cpc, b_roas, b_cpa = w_baseline.ctr, w_baseline.cpc, w_baseline.roas, w_baseline.cpa
+        r_ctr, r_cpc, r_roas, r_cpa = w_recent.ctr, w_recent.cpc, w_recent.roas, w_recent.cpa
+        r_purchases = w_recent.purchases
 
         ctr_delta = _pct_change(b_ctr, r_ctr)
         cpc_delta = _pct_change(b_cpc, r_cpc)
@@ -433,20 +472,13 @@ def analyze_early_fatigue(
             is_escalation=is_escalation,
             is_repeat=is_repeat,
             days_since_first_flagged=days_since,
-            recent_daily_spend=r_daily_spend,
-            baseline_daily_spend=b_daily_spend,
+            days_of_data=len(all_days),
+            windows=windows,
             ctr_delta_pct=ctr_delta,
             cpc_delta_pct=cpc_delta,
             roas_delta_pct=roas_delta,
             cpa_delta_pct=cpa_delta,
-            baseline_ctr=b_ctr,
-            recent_ctr=r_ctr,
-            baseline_cpc=b_cpc,
-            recent_cpc=r_cpc,
-            baseline_roas=b_roas,
-            recent_roas=r_roas,
-            baseline_cpa=b_cpa,
-            recent_cpa=r_cpa,
+            sustained_decline=sustained,
             breaching_metrics=breaching,
             budget_adjusted=budget_adjusted,
             is_tof=is_tof,
