@@ -111,29 +111,25 @@ class TriggerHandler(BaseHTTPRequestHandler):
             config = Config.from_env()
             url = f"{API_BASE}/{TEST_AD_ID}"
 
-            # Test 1: try name-only update (tests basic write access)
-            logger.info("Test 1: name-only update...")
-            resp1 = requests.post(
-                f"{url}?access_token={config.meta_access_token}",
-                data="name=1237673985243723 29-MAR - OFF",
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            # Check token permissions
+            perm_resp = requests.get(
+                f"{API_BASE}/me/permissions?access_token={config.meta_access_token}",
                 timeout=30,
             )
-            test1 = {"code": resp1.status_code, "body": resp1.text[:300]}
-            logger.info(f"Test 1 result: {test1}")
+            permissions = {}
+            if perm_resp.ok:
+                for p in perm_resp.json().get("data", []):
+                    permissions[p["permission"]] = p["status"]
 
-            # Test 2: try status update separately
-            logger.info("Test 2: status update...")
-            resp2 = requests.post(
-                f"{url}?access_token={config.meta_access_token}",
-                data="status=PAUSED",
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=30,
-            )
-            test2 = {"code": resp2.status_code, "body": resp2.text[:300]}
-            logger.info(f"Test 2 result: {test2}")
+            has_ads_management = permissions.get("ads_management") == "granted"
+            has_ads_read = permissions.get("ads_read") == "granted"
 
-            result = {"test1_name": test1, "test2_status": test2}
+            result = {
+                "has_ads_read": has_ads_read,
+                "has_ads_management": has_ads_management,
+                "all_permissions": permissions,
+                "verdict": "Token has write access — ready to go" if has_ads_management else "MISSING ads_management — regenerate token with this permission",
+            }
 
             self._respond(200, result)
         except Exception as e:
