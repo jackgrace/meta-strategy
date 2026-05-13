@@ -19,7 +19,7 @@ from urllib.parse import parse_qs
 
 import requests
 
-from main import run_check, run_fatigue_only
+from main import run_check, run_fatigue_only, run_auto_pause
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._run_check(source="http")
         elif self.path == "/fatigue":
             self._run_fatigue(source="http")
+        elif self.path == "/pause":
+            self._run_pause(source="http")
         else:
             self._respond(404, {"error": "not found"})
 
@@ -43,6 +45,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._handle_slack(run_check, "Running all checks now...")
         elif self.path == "/slack/fatigue":
             self._handle_slack(run_fatigue_only, "Running fatigue check now...")
+        elif self.path == "/slack/pause":
+            self._handle_slack(run_auto_pause, "Running auto-pause check now...")
         elif self.path == "/run":
             self._run_check(source="http")
         elif self.path == "/fatigue":
@@ -81,6 +85,15 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(200, result)
         except Exception as e:
             logger.error(f"Fatigue check failed: {e}")
+            self._respond(500, {"status": "error", "message": str(e)})
+
+    def _run_pause(self, source: str):
+        logger.info(f"Manual trigger via {source} — auto-pause")
+        try:
+            result = run_auto_pause()
+            self._respond(200, result)
+        except Exception as e:
+            logger.error(f"Auto-pause check failed: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
 
     def _run_async(self, check_fn, source: str):
@@ -164,8 +177,10 @@ def start_server():
     logger.info(f"Server listening on port {port}")
     logger.info(f"  GET  /run            — run all checks")
     logger.info(f"  GET  /fatigue        — fatigue check only")
+    logger.info(f"  GET  /pause          — auto-pause dry run")
     logger.info(f"  POST /slack/trigger  — Slack: all checks")
     logger.info(f"  POST /slack/fatigue  — Slack: fatigue only")
+    logger.info(f"  POST /slack/pause    — Slack: auto-pause")
     logger.info(f"  GET  /health         — health check")
     server.serve_forever()
 

@@ -11,6 +11,7 @@ from config import Config
 from meta_api import fetch_ad_insights, fetch_ad_statuses
 from testing_analyzer import analyze_testing_missed_opportunities
 from early_fatigue import analyze_early_fatigue
+from auto_pause import find_pause_candidates, execute_pause, send_pause_report
 from slack_reporter import send_testing_missed_opps, send_early_fatigue_report
 
 logging.basicConfig(
@@ -105,6 +106,45 @@ def run_fatigue_only() -> dict:
         "status": "ok" if fatigue_ok else "error",
         "fatigue_alerts": len(fatigue_alerts),
         "fatigue_sent": fatigue_ok,
+    }
+
+
+def run_auto_pause() -> dict:
+    """Run the auto-pause check. Dry-run unless AUTO_PAUSE_ENABLED=true."""
+    import os
+    dry_run = os.environ.get("AUTO_PAUSE_ENABLED", "").lower() != "true"
+    mode = "DRY RUN" if dry_run else "LIVE"
+    logger.info(f"=== Auto-pause check starting [{mode}] ===")
+
+    config = Config.from_env()
+
+    logger.info("Fetching ad insights from Meta Marketing API...")
+    metrics = fetch_ad_insights(config)
+
+    if not metrics:
+        logger.warning("No ad data returned from Meta API")
+        return {"status": "ok", "message": "No ad data returned"}
+
+    logger.info("Fetching ad statuses...")
+    ad_ids = {m.ad_id for m in metrics}
+    try:
+        ad_statuses = fetch_ad_statuses(config, ad_ids=ad_ids)
+    except Exception as e:
+        logger.error(f"Failed to fetch ad statuses: {e}")
+        ad_statuses = {}
+
+    candidates = find_pause_candidates(metrics, ad_statuses, config)
+    candidates = execute_pause(candidates, config, dry_run=dry_run)
+    pause_ok = send_pause_report(candidates, dry_run, config)
+
+    paused_count = sum(1 for c in candidates if c.action_taken == "paused")
+    logger.info(f"=== Complete: {len(candidates)} candidates, {paused_count} paused [{mode}] ===")
+
+    return {
+        "status": "ok" if pause_ok else "error",
+        "mode": mode,
+        "candidates": len(candidates),
+        "paused": paused_count,
     }
 
 
