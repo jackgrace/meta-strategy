@@ -118,22 +118,16 @@ def run_auto_pause() -> dict:
 
     config = Config.from_env()
 
-    logger.info("Fetching ad insights from Meta Marketing API...")
-    metrics = fetch_ad_insights(config)
-
-    if not metrics:
-        logger.warning("No ad data returned from Meta API")
-        return {"status": "ok", "message": "No ad data returned"}
-
+    # Fetch ad statuses (all ads, not just from insights — we need created_time)
     logger.info("Fetching ad statuses...")
-    ad_ids = {m.ad_id for m in metrics}
     try:
-        ad_statuses = fetch_ad_statuses(config, ad_ids=ad_ids)
+        ad_statuses = fetch_ad_statuses(config)
     except Exception as e:
         logger.error(f"Failed to fetch ad statuses: {e}")
         ad_statuses = {}
 
-    candidates = find_pause_candidates(metrics, ad_statuses, config)
+    # Auto-pause does its own lightweight spend fetch internally
+    candidates = find_pause_candidates(ad_statuses, config)
     candidates = execute_pause(candidates, config, dry_run=dry_run)
     pause_ok = send_pause_report(candidates, dry_run, config)
 

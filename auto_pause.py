@@ -10,12 +10,11 @@ Dry-run by default — set AUTO_PAUSE_ENABLED=true to go live.
 import logging
 import os
 from dataclasses import dataclass
-from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
 import requests
 
-from meta_api import AdDayMetrics, API_BASE
+from meta_api import API_BASE
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -43,39 +42,89 @@ class PauseCandidate:
     action_taken: str  # "would_pause" (dry run) or "paused" (live)
 
 
+def _fetch_14d_spend(config: Config) -> dict[str, dict]:
+    """
+    Lightweight API call: fetch aggregate 14-day spend per ad.
+    No daily breakdown — returns one row per ad with total spend.
+    Much faster than the full insights fetch.
+    """
+    end_date = datetime.now().date() - timedelta(days=1)
+    start_date = end_date - timedelta(days=LOOKBACK_DAYS - 1)
+
+    url = f"{API_BASE}/{config.meta_ad_account_id}/insights"
+    params = {
+        "access_token": config.meta_access_token,
+        "level": "ad",
+        "fields": "ad_id,ad_name,campaign_name,adset_name,spend",
+        "time_range": f'{{"since":"{start_date}","until":"{end_date}"}}',
+        "limit": 500,
+        "filtering": '[{"field":"ad.effective_status","operator":"IN","value":["ACTIVE","IN_REVIEW","WITH_ISSUES"]}]',
+    }
+
+    ad_spend: dict[str, dict] = {}
+    page_count = 0
+
+    while url:
+        page_count += 1
+        resp = requests.get(url, params=params if page_count == 1 else None, timeout=60)
+        if not resp.ok:
+            logger.error(f"Pause spend fetch error {resp.status_code}: {resp.text[:300]}")
+            resp.raise_for_status()
+
+        data = resp.json()
+        for row in data.get("data", []):
+            ad_spend[row["ad_id"]] = {
+                "spend": float(row.get("spend", 0)),
+                "ad_name": row.get("ad_name", "Unknown"),
+                "campaign_name": row.get("campaign_name", "Unknown"),
+                "adset_name": row.get("adset_name", "Unknown"),
+            }
+
+        paging = data.get("paging", {})
+        url = paging.get("next")
+        params = None
+
+    logger.info(f"Fetched 14d spend for {len(ad_spend)} ads across {page_count} pages")
+    return ad_spend
+
+
 def find_pause_candidates(
-    all_metrics: list[AdDayMetrics],
     ad_statuses: dict[str, dict],
     config: Config,
 ) -> list[PauseCandidate]:
     """Find ads created >14 days ago with <$20 spend in last 14 days."""
 
-    ads: dict[str, list[AdDayMetrics]] = defaultdict(list)
-    for m in all_metrics:
-        ads[m.ad_id].append(m)
+    # Lightweight fetch: aggregate 14d spend per ad (no daily breakdown)
+    ad_spend = _fetch_14d_spend(config)
 
-    cutoff = (datetime.now().date() - timedelta(days=LOOKBACK_DAYS)).isoformat()
     today = datetime.now().date()
-
     candidates = []
+    skipped_young = 0
+    skipped_off = 0
+    skipped_paused = 0
 
-    for ad_id, all_days in ads.items():
-        all_days.sort(key=lambda d: d.date)
+    # Check all ads we have status for
+    all_ad_ids = set(ad_spend.keys()) | set(ad_statuses.keys())
 
+    for ad_id in all_ad_ids:
         info = ad_statuses.get(ad_id, {})
         status = info.get("status", "UNKNOWN")
         created_time = info.get("created_time", "")
 
         # Skip already paused/off ads
         if status not in ("ACTIVE", "IN_PROCESS", "WITH_ISSUES", "PENDING_REVIEW"):
+            skipped_paused += 1
             continue
 
-        # Skip ads already with OFF in name
-        ad_name = all_days[0].ad_name
+        spend_data = ad_spend.get(ad_id, {})
+        ad_name = spend_data.get("ad_name", "Unknown")
+
+        # Skip ads with OFF in name
         if "OFF" in ad_name.upper():
+            skipped_off += 1
             continue
 
-        # Check ad age: must be created > 14 days ago
+        # Check ad age
         if not created_time:
             continue
         try:
@@ -85,23 +134,20 @@ def find_pause_candidates(
 
         ad_age = (today - created_date).days
         if ad_age < MIN_AD_AGE_DAYS:
+            skipped_young += 1
             continue
 
-        # Check spend in last 14 days
-        recent_days = [d for d in all_days if d.date >= cutoff]
-        total_spend = sum(d.spend for d in recent_days) if recent_days else 0
+        total_spend = spend_data.get("spend", 0)
 
         if total_spend < SPEND_THRESHOLD:
-            last_spend_date = max((d.date for d in all_days if d.spend > 0), default="none")
-
             candidates.append(PauseCandidate(
                 ad_id=ad_id,
                 ad_name=ad_name,
-                campaign_name=all_days[0].campaign_name,
-                adset_name=all_days[0].adset_name,
+                campaign_name=spend_data.get("campaign_name", "Unknown"),
+                adset_name=spend_data.get("adset_name", "Unknown"),
                 total_spend_14d=total_spend,
-                days_with_data=len(recent_days),
-                last_spend_date=last_spend_date,
+                days_with_data=0,
+                last_spend_date="—",
                 effective_status=status,
                 created_date=created_date.isoformat(),
                 ad_age_days=ad_age,
@@ -111,8 +157,10 @@ def find_pause_candidates(
     candidates.sort(key=lambda c: c.total_spend_14d)
 
     logger.info(
-        f"Auto-pause: {len(candidates)} ads older than {MIN_AD_AGE_DAYS}d "
-        f"with <${SPEND_THRESHOLD} spend in {LOOKBACK_DAYS}d"
+        f"Auto-pause: {len(all_ad_ids)} ads checked │ "
+        f"{skipped_paused} already paused │ {skipped_off} already OFF │ "
+        f"{skipped_young} too young (<{MIN_AD_AGE_DAYS}d) │ "
+        f"{len(candidates)} candidates (<${SPEND_THRESHOLD} in {LOOKBACK_DAYS}d)"
     )
 
     return candidates
