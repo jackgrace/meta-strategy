@@ -24,55 +24,10 @@ logger = logging.getLogger(__name__)
 
 def run_check() -> dict:
     """
-    Daily run: both reports.
-    1. Testing Winner Signals
-    2. Early Fatigue Signals
+    Daily run: auto-pause only.
+    Testing and fatigue checks are disabled but preserved in code.
     """
-    logger.info("=== Daily check starting ===")
-
-    config = Config.from_env()
-
-    # Fetch data (shared by both reports)
-    logger.info("Fetching ad insights from Meta Marketing API...")
-    metrics = fetch_ad_insights(config)
-
-    if not metrics:
-        logger.warning("No ad data returned from Meta API")
-        return {"status": "ok", "message": "No ad data returned"}
-
-    # Fetch ad statuses (only for ads we have insights data for)
-    logger.info("Fetching ad statuses...")
-    ad_ids = {m.ad_id for m in metrics}
-    try:
-        ad_statuses = fetch_ad_statuses(config, ad_ids=ad_ids)
-    except Exception as e:
-        logger.error(f"Failed to fetch ad statuses: {e}")
-        ad_statuses = {}
-
-    results = {}
-
-    # Report 1: Testing Winner Signals
-    logger.info("--- Running Testing Winner Signals ---")
-    testing_reports = analyze_testing_missed_opportunities(metrics, ad_statuses, config)
-    testing_ok = send_testing_missed_opps(testing_reports, config)
-    results["testing_flagged"] = len(testing_reports)
-    results["testing_sent"] = testing_ok
-
-    # Report 2: Early Fatigue Signals
-    logger.info("--- Running Early Fatigue Signals ---")
-    fatigue_alerts, log_entries = analyze_early_fatigue(metrics, ad_statuses, config)
-    fatigue_ok = send_early_fatigue_report(fatigue_alerts, config)
-    results["fatigue_alerts"] = len(fatigue_alerts)
-    results["fatigue_sent"] = fatigue_ok
-    results["fatigue_log_entries"] = len(log_entries)
-
-    logger.info(
-        f"=== Complete: {results['testing_flagged']} testing signals, "
-        f"{results['fatigue_alerts']} fatigue alerts ==="
-    )
-
-    results["status"] = "ok" if (testing_ok and fatigue_ok) else "error"
-    return results
+    return run_auto_pause()
 
 
 def run_fatigue_only() -> dict:
