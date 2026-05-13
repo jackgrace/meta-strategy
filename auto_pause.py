@@ -189,11 +189,11 @@ def execute_pause(candidates: list[PauseCandidate], config: Config, dry_run: boo
         url = f"{API_BASE}/{c.ad_id}"
 
         try:
-            resp = requests.post(url, data={
-                "access_token": config.meta_access_token,
-                "status": "PAUSED",
-                "name": new_name,
-            }, timeout=30)
+            resp = requests.post(
+                f"{url}?access_token={config.meta_access_token}",
+                json={"status": "PAUSED", "name": new_name},
+                timeout=30,
+            )
             if resp.ok:
                 c.action_taken = "paused"
                 logger.info(f"Paused ad {c.ad_id} ({c.ad_name} → {new_name})")

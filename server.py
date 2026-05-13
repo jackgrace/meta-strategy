@@ -112,11 +112,11 @@ class TriggerHandler(BaseHTTPRequestHandler):
             url = f"{API_BASE}/{TEST_AD_ID}"
 
             # Step 1: try to pause
-            resp = requests.post(url, data={
-                "access_token": config.meta_access_token,
-                "status": "PAUSED",
-                "name": "1237673985243723 29-MAR - OFF",
-            }, timeout=30)
+            resp = requests.post(
+                f"{url}?access_token={config.meta_access_token}",
+                json={"status": "PAUSED", "name": "1237673985243723 29-MAR - OFF"},
+                timeout=30,
+            )
 
             if resp.ok:
                 result = {"status": "ok", "message": f"Ad {TEST_AD_ID} paused successfully", "response": resp.json()}
