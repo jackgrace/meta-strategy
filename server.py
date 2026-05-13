@@ -37,6 +37,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._run_fatigue(source="http")
         elif self.path == "/pause":
             self._run_pause(source="http")
+        elif self.path == "/pause/test":
+            self._test_pause(source="http")
         else:
             self._respond(404, {"error": "not found"})
 
@@ -94,6 +96,38 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(200, result)
         except Exception as e:
             logger.error(f"Auto-pause check failed: {e}")
+            self._respond(500, {"status": "error", "message": str(e)})
+
+    def _test_pause(self, source: str):
+        """Test write permissions by pausing a single known ad."""
+        import os
+        from meta_api import API_BASE
+        from config import Config
+
+        logger.info(f"Testing pause write permission via {source}")
+        TEST_AD_ID = "1237673985243723"
+
+        try:
+            config = Config.from_env()
+            url = f"{API_BASE}/{TEST_AD_ID}"
+
+            # Step 1: try to pause
+            resp = requests.post(url, params={
+                "access_token": config.meta_access_token,
+                "status": "PAUSED",
+                "name": "1237673985243723 29-MAR - OFF",
+            }, timeout=30)
+
+            if resp.ok:
+                result = {"status": "ok", "message": f"Ad {TEST_AD_ID} paused successfully", "response": resp.json()}
+                logger.info(f"Test pause succeeded: {resp.json()}")
+            else:
+                result = {"status": "error", "code": resp.status_code, "message": resp.text[:500]}
+                logger.error(f"Test pause failed: {resp.status_code} {resp.text[:500]}")
+
+            self._respond(resp.status_code if not resp.ok else 200, result)
+        except Exception as e:
+            logger.error(f"Test pause error: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
 
     def _run_async(self, check_fn, source: str):
