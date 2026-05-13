@@ -102,6 +102,7 @@ def find_pause_candidates(
     skipped_young = 0
     skipped_off = 0
     skipped_paused = 0
+    skipped_campaign = 0
 
     # Check all ads we have status for
     all_ad_ids = set(ad_spend.keys()) | set(ad_statuses.keys())
@@ -121,6 +122,11 @@ def find_pause_candidates(
         ad_name = spend_data.get("ad_name") or info.get("name", "Unknown")
         campaign_name = spend_data.get("campaign_name") or info.get("campaign_name", "Unknown")
         adset_name = spend_data.get("adset_name") or info.get("adset_name", "Unknown")
+
+        # Only check SCALING campaigns
+        if "SCALE" not in campaign_name.upper():
+            skipped_campaign += 1
+            continue
 
         # Skip ads with OFF in name
         if "OFF" in ad_name.upper():
@@ -161,8 +167,8 @@ def find_pause_candidates(
 
     logger.info(
         f"Auto-pause: {len(all_ad_ids)} ads checked │ "
-        f"{skipped_paused} already paused │ {skipped_off} already OFF │ "
-        f"{skipped_young} too young (<{MIN_AD_AGE_DAYS}d) │ "
+        f"{skipped_paused} already paused │ {skipped_campaign} not SCALE │ "
+        f"{skipped_off} already OFF │ {skipped_young} too young (<{MIN_AD_AGE_DAYS}d) │ "
         f"{len(candidates)} candidates (<${SPEND_THRESHOLD} in {LOOKBACK_DAYS}d)"
     )
 
