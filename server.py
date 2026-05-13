@@ -111,19 +111,29 @@ class TriggerHandler(BaseHTTPRequestHandler):
             config = Config.from_env()
             url = f"{API_BASE}/{TEST_AD_ID}"
 
-            # Step 1: try to pause
-            resp = requests.post(
+            # Test 1: try name-only update (tests basic write access)
+            logger.info("Test 1: name-only update...")
+            resp1 = requests.post(
                 f"{url}?access_token={config.meta_access_token}",
-                json={"status": "PAUSED", "name": "1237673985243723 29-MAR - OFF"},
+                data="name=1237673985243723 29-MAR - OFF",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
                 timeout=30,
             )
+            test1 = {"code": resp1.status_code, "body": resp1.text[:300]}
+            logger.info(f"Test 1 result: {test1}")
 
-            if resp.ok:
-                result = {"status": "ok", "message": f"Ad {TEST_AD_ID} paused successfully", "response": resp.json()}
-                logger.info(f"Test pause succeeded: {resp.json()}")
-            else:
-                result = {"status": "error", "code": resp.status_code, "message": resp.text[:500]}
-                logger.error(f"Test pause failed: {resp.status_code} {resp.text[:500]}")
+            # Test 2: try status update separately
+            logger.info("Test 2: status update...")
+            resp2 = requests.post(
+                f"{url}?access_token={config.meta_access_token}",
+                data="status=PAUSED",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=30,
+            )
+            test2 = {"code": resp2.status_code, "body": resp2.text[:300]}
+            logger.info(f"Test 2 result: {test2}")
+
+            result = {"test1_name": test1, "test2_status": test2}
 
             self._respond(resp.status_code if not resp.ok else 200, result)
         except Exception as e:
