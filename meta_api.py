@@ -214,16 +214,15 @@ def fetch_ad_insights(config: Config) -> list[AdDayMetrics]:
     return all_metrics
 
 
-def fetch_ad_statuses(config: Config, ad_ids: set[str] | None = None) -> dict[str, str]:
+def fetch_ad_statuses(config: Config, ad_ids: set[str] | None = None) -> dict[str, dict]:
     """
-    Fetch effective_status for ads. If ad_ids is provided, fetches only
-    those specific ads (much faster than fetching all 10k+ ads).
-    Returns a dict mapping ad_id -> effective_status.
+    Fetch effective_status and created_time for ads. If ad_ids is provided,
+    fetches only those specific ads.
+    Returns dict mapping ad_id -> {"status": str, "created_time": str}.
     """
-    statuses: dict[str, str] = {}
+    ad_info: dict[str, dict] = {}
 
     if ad_ids:
-        # Batch lookup: fetch status for specific ads (50 at a time via /?ids=)
         id_list = list(ad_ids)
         batch_size = 50
         for i in range(0, len(id_list), batch_size):
@@ -232,7 +231,7 @@ def fetch_ad_statuses(config: Config, ad_ids: set[str] | None = None) -> dict[st
             params = {
                 "access_token": config.meta_access_token,
                 "ids": ",".join(batch),
-                "fields": "effective_status",
+                "fields": "effective_status,created_time",
             }
 
             resp = None
@@ -254,20 +253,22 @@ def fetch_ad_statuses(config: Config, ad_ids: set[str] | None = None) -> dict[st
 
             data = resp.json()
             for ad_id_key, ad_data in data.items():
-                statuses[ad_id_key] = ad_data.get("effective_status", "UNKNOWN")
+                ad_info[ad_id_key] = {
+                    "status": ad_data.get("effective_status", "UNKNOWN"),
+                    "created_time": ad_data.get("created_time", ""),
+                }
 
-        logger.info(f"Fetched effective_status for {len(statuses)} ads ({len(id_list)} requested)")
-        return statuses
+        logger.info(f"Fetched ad info for {len(ad_info)} ads ({len(id_list)} requested)")
+        return ad_info
 
     # Fallback: fetch all ads in account (slow but complete)
     url = f"{API_BASE}/{config.meta_ad_account_id}/ads"
     params = {
         "access_token": config.meta_access_token,
-        "fields": "id,effective_status",
+        "fields": "id,effective_status,created_time",
         "limit": 500,
     }
 
-    statuses: dict[str, str] = {}
     page_count = 0
 
     while url:
@@ -294,11 +295,14 @@ def fetch_ad_statuses(config: Config, ad_ids: set[str] | None = None) -> dict[st
         data = resp.json()
 
         for row in data.get("data", []):
-            statuses[row["id"]] = row.get("effective_status", "UNKNOWN")
+            ad_info[row["id"]] = {
+                "status": row.get("effective_status", "UNKNOWN"),
+                "created_time": row.get("created_time", ""),
+            }
 
         paging = data.get("paging", {})
         url = paging.get("next")
         params = None
 
-    logger.info(f"Fetched effective_status for {len(statuses)} ads across {page_count} pages")
-    return statuses
+    logger.info(f"Fetched ad info for {len(ad_info)} ads across {page_count} pages")
+    return ad_info

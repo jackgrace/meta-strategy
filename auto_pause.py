@@ -1,8 +1,8 @@
 """
 Auto-pause agent.
 
-Finds ads with less than $20 spend in the last 20 days and pauses them,
-adding "OFF" to the ad name so automated rules don't reactivate them.
+Finds ads that are older than 14 days with less than $20 spend in the
+last 14 days, pauses them, and adds " - OFF" to the name.
 
 Dry-run by default — set AUTO_PAUSE_ENABLED=true to go live.
 """
@@ -22,8 +22,9 @@ logger = logging.getLogger(__name__)
 
 AEST = timezone(timedelta(hours=10))
 
-SPEND_THRESHOLD = 20.0  # Less than $20 in 20 days
-LOOKBACK_DAYS = 20
+SPEND_THRESHOLD = 20.0
+LOOKBACK_DAYS = 14
+MIN_AD_AGE_DAYS = 14
 
 
 @dataclass
@@ -33,71 +34,86 @@ class PauseCandidate:
     ad_name: str
     campaign_name: str
     adset_name: str
-    total_spend_20d: float
+    total_spend_14d: float
     days_with_data: int
     last_spend_date: str
     effective_status: str
+    created_date: str
+    ad_age_days: int
     action_taken: str  # "would_pause" (dry run) or "paused" (live)
 
 
 def find_pause_candidates(
     all_metrics: list[AdDayMetrics],
-    ad_statuses: dict[str, str],
+    ad_statuses: dict[str, dict],
     config: Config,
 ) -> list[PauseCandidate]:
-    """Find ads with <$20 spend in the last 20 days."""
+    """Find ads created >14 days ago with <$20 spend in last 14 days."""
 
-    # Group by ad
     ads: dict[str, list[AdDayMetrics]] = defaultdict(list)
     for m in all_metrics:
         ads[m.ad_id].append(m)
 
-    # Only look at last 20 days of data
     cutoff = (datetime.now().date() - timedelta(days=LOOKBACK_DAYS)).isoformat()
+    today = datetime.now().date()
 
     candidates = []
 
     for ad_id, all_days in ads.items():
         all_days.sort(key=lambda d: d.date)
 
-        # Filter to last 20 days
-        recent_days = [d for d in all_days if d.date >= cutoff]
-
-        if not recent_days:
-            continue
-
-        status = ad_statuses.get(ad_id, "UNKNOWN")
+        info = ad_statuses.get(ad_id, {})
+        status = info.get("status", "UNKNOWN")
+        created_time = info.get("created_time", "")
 
         # Skip already paused/off ads
         if status not in ("ACTIVE", "IN_PROCESS", "WITH_ISSUES", "PENDING_REVIEW"):
             continue
 
         # Skip ads already with OFF in name
-        ad_name = recent_days[0].ad_name
+        ad_name = all_days[0].ad_name
         if "OFF" in ad_name.upper():
             continue
 
-        total_spend = sum(d.spend for d in recent_days)
+        # Check ad age: must be created > 14 days ago
+        if not created_time:
+            continue
+        try:
+            created_date = datetime.fromisoformat(created_time.replace("+0000", "+00:00")).date()
+        except (ValueError, AttributeError):
+            continue
+
+        ad_age = (today - created_date).days
+        if ad_age < MIN_AD_AGE_DAYS:
+            continue
+
+        # Check spend in last 14 days
+        recent_days = [d for d in all_days if d.date >= cutoff]
+        total_spend = sum(d.spend for d in recent_days) if recent_days else 0
 
         if total_spend < SPEND_THRESHOLD:
-            last_spend_date = max((d.date for d in recent_days if d.spend > 0), default="none")
+            last_spend_date = max((d.date for d in all_days if d.spend > 0), default="none")
 
             candidates.append(PauseCandidate(
                 ad_id=ad_id,
                 ad_name=ad_name,
-                campaign_name=recent_days[0].campaign_name,
-                adset_name=recent_days[0].adset_name,
-                total_spend_20d=total_spend,
+                campaign_name=all_days[0].campaign_name,
+                adset_name=all_days[0].adset_name,
+                total_spend_14d=total_spend,
                 days_with_data=len(recent_days),
                 last_spend_date=last_spend_date,
                 effective_status=status,
+                created_date=created_date.isoformat(),
+                ad_age_days=ad_age,
                 action_taken="pending",
             ))
 
-    # Sort by spend ascending (least spend first)
-    candidates.sort(key=lambda c: c.total_spend_20d)
+    candidates.sort(key=lambda c: c.total_spend_14d)
 
-    logger.info(f"Auto-pause: {len(candidates)} ads with <${SPEND_THRESHOLD} spend in {LOOKBACK_DAYS}d")
+    logger.info(
+        f"Auto-pause: {len(candidates)} ads older than {MIN_AD_AGE_DAYS}d "
+        f"with <${SPEND_THRESHOLD} spend in {LOOKBACK_DAYS}d"
+    )
 
     return candidates
 
@@ -112,7 +128,6 @@ def execute_pause(candidates: list[PauseCandidate], config: Config, dry_run: boo
             c.action_taken = "would_pause"
             continue
 
-        # Live mode: pause and rename
         new_name = f"{c.ad_name} - OFF"
         url = f"{API_BASE}/{c.ad_id}"
         params = {
@@ -143,7 +158,7 @@ def build_pause_slack_message(candidates: list[PauseCandidate], dry_run: bool) -
 
     now = datetime.now(AEST).strftime("%a %d %b %Y")
     mode = "DRY RUN" if dry_run else "LIVE"
-    total_spend = sum(c.total_spend_20d for c in candidates)
+    total_spend = sum(c.total_spend_14d for c in candidates)
 
     blocks = []
 
@@ -157,14 +172,13 @@ def build_pause_slack_message(candidates: list[PauseCandidate], dry_run: bool) -
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* *{len(candidates)} ads* {action_text}\n"
-            f"Rule: <${SPEND_THRESHOLD:.0f} spend in last {LOOKBACK_DAYS} days\n"
-            f"Total 20d spend on flagged ads: *${total_spend:.2f}*"
+            f"Rule: created >{MIN_AD_AGE_DAYS} days ago AND <${SPEND_THRESHOLD:.0f} spend in last {LOOKBACK_DAYS} days\n"
+            f"Total 14d spend on flagged ads: *${total_spend:.2f}*"
         )}
     })
 
     blocks.append({"type": "divider"})
 
-    # Cap display
     MAX_DISPLAY = 30
     displayed = candidates[:MAX_DISPLAY]
 
@@ -174,7 +188,7 @@ def build_pause_slack_message(candidates: list[PauseCandidate], dry_run: bool) -
         lines = [
             f"{status_emoji} *{c.ad_name}*",
             f"Campaign: `{c.campaign_name}` │ Adset: `{c.adset_name}`",
-            f"20d spend: ${c.total_spend_20d:.2f} │ Last spend: {c.last_spend_date} │ Status: `{c.effective_status}`",
+            f"14d spend: ${c.total_spend_14d:.2f} │ Last spend: {c.last_spend_date} │ Created: {c.created_date} ({c.ad_age_days}d old)",
         ]
 
         blocks.append({

@@ -96,7 +96,7 @@ def analyze_testing_missed_opportunities(
     off_ads = 0
     unknown_status = 0
     for ad_id in testing_by_ad:
-        status = ad_statuses.get(ad_id, "UNKNOWN")
+        status = ad_statuses.get(ad_id, {}).get("status", "UNKNOWN")
         if status in OFF_STATUSES:
             off_ads += 1
         elif status in ACTIVE_STATUSES:
@@ -115,7 +115,7 @@ def analyze_testing_missed_opportunities(
     active_with_atcs = 0
 
     for ad_id, days in testing_by_ad.items():
-        status = ad_statuses.get(ad_id, "UNKNOWN")
+        status = ad_statuses.get(ad_id, {}).get("status", "UNKNOWN")
         if status not in ACTIVE_STATUSES:
             continue
 
@@ -155,7 +155,7 @@ def analyze_testing_missed_opportunities(
     off_below_baseline = 0
 
     for ad_id, days in testing_by_ad.items():
-        status = ad_statuses.get(ad_id, "UNKNOWN")
+        status = ad_statuses.get(ad_id, {}).get("status", "UNKNOWN")
         if status not in OFF_STATUSES:
             continue
 

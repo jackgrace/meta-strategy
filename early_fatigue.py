@@ -283,7 +283,7 @@ def analyze_early_fatigue(
     for ad_id, all_days in ads.items():
         all_days.sort(key=lambda d: d.date)
 
-        status = ad_statuses.get(ad_id, "UNKNOWN")
+        status = ad_statuses.get(ad_id, {}).get("status", "UNKNOWN")
         if status != "ACTIVE":
             skipped_not_active += 1
             continue
