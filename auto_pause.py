@@ -117,7 +117,10 @@ def find_pause_candidates(
             continue
 
         spend_data = ad_spend.get(ad_id, {})
-        ad_name = spend_data.get("ad_name", "Unknown")
+        # Prefer name from spend data (insights), fall back to /ads endpoint
+        ad_name = spend_data.get("ad_name") or info.get("name", "Unknown")
+        campaign_name = spend_data.get("campaign_name") or info.get("campaign_name", "Unknown")
+        adset_name = spend_data.get("adset_name") or info.get("adset_name", "Unknown")
 
         # Skip ads with OFF in name
         if "OFF" in ad_name.upper():
@@ -143,8 +146,8 @@ def find_pause_candidates(
             candidates.append(PauseCandidate(
                 ad_id=ad_id,
                 ad_name=ad_name,
-                campaign_name=spend_data.get("campaign_name", "Unknown"),
-                adset_name=spend_data.get("adset_name", "Unknown"),
+                campaign_name=campaign_name,
+                adset_name=adset_name,
                 total_spend_14d=total_spend,
                 days_with_data=0,
                 last_spend_date="—",

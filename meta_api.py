@@ -231,7 +231,7 @@ def fetch_ad_statuses(config: Config, ad_ids: set[str] | None = None) -> dict[st
             params = {
                 "access_token": config.meta_access_token,
                 "ids": ",".join(batch),
-                "fields": "effective_status,created_time",
+                "fields": "effective_status,created_time,name,campaign{name},adset{name}",
             }
 
             resp = None
@@ -256,6 +256,9 @@ def fetch_ad_statuses(config: Config, ad_ids: set[str] | None = None) -> dict[st
                 ad_info[ad_id_key] = {
                     "status": ad_data.get("effective_status", "UNKNOWN"),
                     "created_time": ad_data.get("created_time", ""),
+                    "name": ad_data.get("name", "Unknown"),
+                    "campaign_name": ad_data.get("campaign", {}).get("name", "Unknown"),
+                    "adset_name": ad_data.get("adset", {}).get("name", "Unknown"),
                 }
 
         logger.info(f"Fetched ad info for {len(ad_info)} ads ({len(id_list)} requested)")
@@ -265,7 +268,7 @@ def fetch_ad_statuses(config: Config, ad_ids: set[str] | None = None) -> dict[st
     url = f"{API_BASE}/{config.meta_ad_account_id}/ads"
     params = {
         "access_token": config.meta_access_token,
-        "fields": "id,effective_status,created_time",
+        "fields": "id,effective_status,created_time,name,campaign{name},adset{name}",
         "limit": 500,
     }
 
@@ -298,6 +301,9 @@ def fetch_ad_statuses(config: Config, ad_ids: set[str] | None = None) -> dict[st
             ad_info[row["id"]] = {
                 "status": row.get("effective_status", "UNKNOWN"),
                 "created_time": row.get("created_time", ""),
+                "name": row.get("name", "Unknown"),
+                "campaign_name": row.get("campaign", {}).get("name", "Unknown"),
+                "adset_name": row.get("adset", {}).get("name", "Unknown"),
             }
 
         paging = data.get("paging", {})
