@@ -135,7 +135,7 @@ class TriggerHandler(BaseHTTPRequestHandler):
 
             result = {"test1_name": test1, "test2_status": test2}
 
-            self._respond(resp.status_code if not resp.ok else 200, result)
+            self._respond(200, result)
         except Exception as e:
             logger.error(f"Test pause error: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
