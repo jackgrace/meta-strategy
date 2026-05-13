@@ -14,7 +14,7 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-API_BASE = "https://graph.facebook.com/v21.0"
+API_BASE = "https://graph.facebook.com/v23.0"
 
 # Fields we need for fatigue analysis
 INSIGHT_FIELDS = [
