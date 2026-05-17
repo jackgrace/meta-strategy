@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 AEST = timezone(timedelta(hours=10))
 
-SPEND_THRESHOLD = 20.0
+SPEND_THRESHOLD = 30.0
 LOOKBACK_DAYS = 14
 MIN_AD_AGE_DAYS = 14
 
