@@ -198,8 +198,14 @@ def execute_pause(candidates: list[PauseCandidate], config: Config, dry_run: boo
                 c.action_taken = "paused"
                 logger.info(f"Paused ad {c.ad_id} ({c.ad_name} → {new_name})")
             else:
-                c.action_taken = f"failed: {resp.status_code}"
-                logger.error(f"Failed to pause {c.ad_id}: {resp.status_code} {resp.text[:200]}")
+                # Extract human-readable error from Meta's response
+                try:
+                    err = resp.json().get("error", {})
+                    reason = err.get("error_user_title", err.get("message", "Unknown error"))
+                except Exception:
+                    reason = f"HTTP {resp.status_code}"
+                c.action_taken = f"skipped: {reason}"
+                logger.warning(f"Could not pause {c.ad_id}: {reason}")
         except Exception as e:
             c.action_taken = f"error: {str(e)[:100]}"
             logger.error(f"Error pausing {c.ad_id}: {e}")
@@ -239,13 +245,23 @@ def build_pause_slack_message(candidates: list[PauseCandidate], dry_run: bool) -
     displayed = candidates[:MAX_DISPLAY]
 
     for c in displayed:
-        status_emoji = "✅" if c.action_taken == "paused" else "👀" if c.action_taken == "would_pause" else "❌"
+        if c.action_taken == "paused":
+            status_emoji = "✅"
+        elif c.action_taken == "would_pause":
+            status_emoji = "👀"
+        elif c.action_taken.startswith("skipped:"):
+            status_emoji = "⚠️"
+        else:
+            status_emoji = "❌"
 
         lines = [
             f"{status_emoji} *{c.ad_name}*",
             f"Campaign: `{c.campaign_name}` │ Adset: `{c.adset_name}`",
             f"14d spend: ${c.total_spend_14d:.2f} │ Last spend: {c.last_spend_date} │ Created: {c.created_date} ({c.ad_age_days}d old)",
         ]
+
+        if c.action_taken.startswith("skipped:"):
+            lines.append(f"_{c.action_taken}_")
 
         blocks.append({
             "type": "section",
