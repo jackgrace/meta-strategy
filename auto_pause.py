@@ -189,10 +189,10 @@ def execute_pause(candidates: list[PauseCandidate], config: Config, dry_run: boo
         url = f"{API_BASE}/{c.ad_id}"
 
         try:
-            # Step 1: Pause the ad
+            # Step 1: Pause the ad (form-encoded, matching curl -d behavior)
             resp = requests.post(
                 f"{url}?access_token={config.meta_access_token}",
-                json={"status": "PAUSED"},
+                data={"status": "PAUSED"},
                 timeout=30,
             )
             if not resp.ok:
@@ -205,10 +205,10 @@ def execute_pause(candidates: list[PauseCandidate], config: Config, dry_run: boo
                 logger.warning(f"Could not pause {c.ad_id}: {reason}")
                 continue
 
-            # Step 2: Rename with OFF (separate call to avoid creative validation)
+            # Step 2: Rename with OFF (separate call)
             resp2 = requests.post(
                 f"{url}?access_token={config.meta_access_token}",
-                json={"name": new_name},
+                data={"name": new_name},
                 timeout=30,
             )
             if resp2.ok:
