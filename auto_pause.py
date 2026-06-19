@@ -185,13 +185,12 @@ def execute_pause(candidates: list[PauseCandidate], config: Config, dry_run: boo
             c.action_taken = "would_pause"
             continue
 
-        new_name = f"{c.ad_name} - OFF"
         url = f"{API_BASE}/{c.ad_id}"
 
         try:
             resp = requests.post(
                 f"{url}?access_token={config.meta_access_token}",
-                json={"status": "PAUSED", "name": new_name},
+                data={"status": "PAUSED"},
                 timeout=30,
             )
             if not resp.ok:
@@ -204,14 +203,8 @@ def execute_pause(candidates: list[PauseCandidate], config: Config, dry_run: boo
                 logger.warning(f"Could not pause {c.ad_id}: {reason}")
                 continue
 
-            resp2 = None  # No separate rename needed
-            if resp2.ok:
-                c.action_taken = "paused"
-                logger.info(f"Paused ad {c.ad_id} ({c.ad_name} → {new_name})")
-            else:
-                # Paused but rename failed — still counts as paused
-                c.action_taken = "paused (rename failed)"
-                logger.warning(f"Paused {c.ad_id} but rename failed: {resp2.text[:200]}")
+            c.action_taken = "paused"
+            logger.info(f"Paused ad {c.ad_id} ({c.ad_name})")
         except Exception as e:
             c.action_taken = f"error: {str(e)[:100]}"
             logger.error(f"Error pausing {c.ad_id}: {e}")
