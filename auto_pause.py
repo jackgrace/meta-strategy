@@ -189,19 +189,11 @@ def execute_pause(candidates: list[PauseCandidate], config: Config, dry_run: boo
         url = f"{API_BASE}/{c.ad_id}"
 
         try:
-            # Try pausing with configured_status first (may bypass creative validation)
             resp = requests.post(
                 f"{url}?access_token={config.meta_access_token}",
-                data={"configured_status": "PAUSED"},
+                json={"status": "PAUSED", "name": new_name},
                 timeout=30,
             )
-            if not resp.ok:
-                # Fallback: try regular status field
-                resp = requests.post(
-                    f"{url}?access_token={config.meta_access_token}",
-                    data={"status": "PAUSED"},
-                    timeout=30,
-                )
             if not resp.ok:
                 try:
                     err = resp.json().get("error", {})
@@ -212,12 +204,7 @@ def execute_pause(candidates: list[PauseCandidate], config: Config, dry_run: boo
                 logger.warning(f"Could not pause {c.ad_id}: {reason}")
                 continue
 
-            # Step 2: Rename with OFF (separate call)
-            resp2 = requests.post(
-                f"{url}?access_token={config.meta_access_token}",
-                data={"name": new_name},
-                timeout=30,
-            )
+            resp2 = None  # No separate rename needed
             if resp2.ok:
                 c.action_taken = "paused"
                 logger.info(f"Paused ad {c.ad_id} ({c.ad_name} → {new_name})")
