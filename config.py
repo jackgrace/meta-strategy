@@ -70,9 +70,9 @@ class Config:
     @classmethod
     def from_env(cls) -> "Config":
         cfg = cls(
-            meta_access_token=os.environ["META_ACCESS_TOKEN"],
-            meta_ad_account_id=os.environ["META_AD_ACCOUNT_ID"],
-            slack_webhook_url=os.environ["SLACK_WEBHOOK_URL"],
+            meta_access_token=os.environ["META_ACCESS_TOKEN"].strip(),
+            meta_ad_account_id=os.environ["META_AD_ACCOUNT_ID"].strip(),
+            slack_webhook_url=os.environ["SLACK_WEBHOOK_URL"].strip(),
         )
 
         # Optional overrides
