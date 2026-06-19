@@ -243,7 +243,46 @@ def build_pause_slack_message(candidates: list[PauseCandidate], dry_run: bool) -
     MAX_DISPLAY = 30
     displayed = candidates[:MAX_DISPLAY]
 
-    for c in displayed:
+    # Split into paused vs needs manual action
+    paused = [c for c in candidates if c.action_taken == "paused"]
+    manual = [c for c in candidates if c.action_taken.startswith("skipped:")]
+    would_pause = [c for c in candidates if c.action_taken == "would_pause"]
+
+    if not dry_run and manual:
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": (
+                f"✅ *{len(paused)} paused* via API │ "
+                f"⚠️ *{len(manual)} need manual pause* (Meta API won't update these)"
+            )}
+        })
+        blocks.append({"type": "divider"})
+
+    if manual and not dry_run:
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "⚠️ *Manual pause needed:*"}
+        })
+        for c in manual[:MAX_DISPLAY]:
+            lines = [
+                f"• *{c.ad_name}*",
+                f"  Campaign: `{c.campaign_name}` │ Adset: `{c.adset_name}`",
+                f"  14d spend: ${c.total_spend_14d:.2f} │ Created: {c.created_date} ({c.ad_age_days}d old)",
+            ]
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "\n".join(lines)}
+            })
+        blocks.append({"type": "divider"})
+
+    if paused:
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "✅ *Paused via API:*"}
+        })
+
+    show_list = would_pause if dry_run else paused
+    for c in show_list[:MAX_DISPLAY]:
         if c.action_taken == "paused":
             status_emoji = "✅"
         elif c.action_taken == "would_pause":
