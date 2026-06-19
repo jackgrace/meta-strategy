@@ -189,12 +189,19 @@ def execute_pause(candidates: list[PauseCandidate], config: Config, dry_run: boo
         url = f"{API_BASE}/{c.ad_id}"
 
         try:
-            # Step 1: Pause the ad (form-encoded, matching curl -d behavior)
+            # Try pausing with configured_status first (may bypass creative validation)
             resp = requests.post(
                 f"{url}?access_token={config.meta_access_token}",
-                data={"status": "PAUSED"},
+                data={"configured_status": "PAUSED"},
                 timeout=30,
             )
+            if not resp.ok:
+                # Fallback: try regular status field
+                resp = requests.post(
+                    f"{url}?access_token={config.meta_access_token}",
+                    data={"status": "PAUSED"},
+                    timeout=30,
+                )
             if not resp.ok:
                 try:
                     err = resp.json().get("error", {})
