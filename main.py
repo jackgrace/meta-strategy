@@ -24,10 +24,11 @@ logger = logging.getLogger(__name__)
 
 def run_check() -> dict:
     """
-    Daily run: auto-pause only.
-    Testing and fatigue checks are disabled but preserved in code.
+    Daily run: disabled.
+    Auto-pause disabled due to Meta API blocking ASC ad updates.
     """
-    return run_auto_pause()
+    logger.info("=== No checks configured — skipping ===")
+    return {"status": "ok", "message": "No checks configured"}
 
 
 def run_fatigue_only() -> dict:
