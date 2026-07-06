@@ -24,11 +24,9 @@ logger = logging.getLogger(__name__)
 
 def run_check() -> dict:
     """
-    Daily run: disabled.
-    Auto-pause disabled due to Meta API blocking ASC ad updates.
+    Daily run: auto-pause (CC campaigns, >14d old, <$30 spend in 14d).
     """
-    logger.info("=== No checks configured — skipping ===")
-    return {"status": "ok", "message": "No checks configured"}
+    return run_auto_pause()
 
 
 def run_fatigue_only() -> dict:
