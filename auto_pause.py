@@ -241,7 +241,8 @@ def build_pause_slack_message(candidates: list[PauseCandidate], dry_run: bool) -
 
     blocks.append({"type": "divider"})
 
-    MAX_DISPLAY = 30
+    # Slack has a 50-block limit — cap tight to leave room for headers/dividers
+    MAX_DISPLAY = 15
     displayed = candidates[:MAX_DISPLAY]
 
     # Split into paused vs needs manual action
@@ -307,11 +308,12 @@ def build_pause_slack_message(candidates: list[PauseCandidate], dry_run: bool) -
             "text": {"type": "mrkdwn", "text": "\n".join(lines)}
         })
 
-    overflow = len(candidates) - len(displayed)
+    show_list_len = len(would_pause) if dry_run else len(paused)
+    overflow = show_list_len - min(MAX_DISPLAY, show_list_len)
     if overflow > 0:
         blocks.append({
             "type": "context",
-            "elements": [{"type": "mrkdwn", "text": f"_+{overflow} more ads not shown_"}]
+            "elements": [{"type": "mrkdwn", "text": f"_+{overflow} more paused ads not shown_"}]
         })
 
     blocks.append({"type": "divider"})
