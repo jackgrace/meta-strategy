@@ -123,9 +123,9 @@ def find_pause_candidates(
         campaign_name = spend_data.get("campaign_name") or info.get("campaign_name", "Unknown")
         adset_name = spend_data.get("adset_name") or info.get("adset_name", "Unknown")
 
-        # Only check CC campaigns (match as a whole word to avoid false matches like "CCTV")
+        # Only check target campaigns (CC or VALUE, whole word)
         campaign_parts = [p.strip() for p in campaign_name.upper().replace("|", " ").split()]
-        if "CC" not in campaign_parts:
+        if "CC" not in campaign_parts and "VALUE" not in campaign_parts:
             skipped_campaign += 1
             continue
 
@@ -168,7 +168,7 @@ def find_pause_candidates(
 
     logger.info(
         f"Auto-pause: {len(all_ad_ids)} ads checked │ "
-        f"{skipped_paused} already paused │ {skipped_campaign} not CC │ "
+        f"{skipped_paused} already paused │ {skipped_campaign} not CC/VALUE │ "
         f"{skipped_off} already OFF │ {skipped_young} too young (<{MIN_AD_AGE_DAYS}d) │ "
         f"{len(candidates)} candidates (<${SPEND_THRESHOLD} in {LOOKBACK_DAYS}d)"
     )
@@ -234,7 +234,7 @@ def build_pause_slack_message(candidates: list[PauseCandidate], dry_run: bool) -
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* *{len(candidates)} ads* {action_text}\n"
-            f"Rule: CC campaigns │ created >{MIN_AD_AGE_DAYS} days ago │ <${SPEND_THRESHOLD:.0f} spend in last {LOOKBACK_DAYS} days\n"
+            f"Rule: CC or VALUE campaigns │ created >{MIN_AD_AGE_DAYS} days ago │ <${SPEND_THRESHOLD:.0f} spend in last {LOOKBACK_DAYS} days\n"
             f"Total 14d spend on flagged ads: *${total_spend:.2f}*"
         )}
     })

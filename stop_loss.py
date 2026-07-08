@@ -165,10 +165,13 @@ def _update_ad_status(config: Config, ad_id: str, new_status: str) -> tuple[bool
         return False, str(e)[:100]
 
 
-def _is_cc_campaign(campaign_name: str) -> bool:
-    """Check if campaign name contains 'CC' as a whole word."""
+TARGET_KEYWORDS = {"CC", "VALUE"}
+
+
+def _is_target_campaign(campaign_name: str) -> bool:
+    """Match campaign name containing CC or VALUE as a whole word."""
     parts = [p.strip() for p in campaign_name.upper().replace("|", " ").split()]
-    return "CC" in parts
+    return any(k in parts for k in TARGET_KEYWORDS)
 
 
 def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossAction], list[AdsetAction]]:
@@ -197,18 +200,18 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         return [], []
 
     # Fetch statuses for CC-campaign adsets
-    cc_adset_ids: set[str] = set()
+    target_adset_ids: set[str] = set()
     adset_meta: dict[str, dict] = {}
     for ad in today_ads.values():
-        if _is_cc_campaign(ad["campaign_name"]) and ad["adset_id"]:
-            cc_adset_ids.add(ad["adset_id"])
+        if _is_target_campaign(ad["campaign_name"]) and ad["adset_id"]:
+            target_adset_ids.add(ad["adset_id"])
             adset_meta[ad["adset_id"]] = {
                 "adset_name": ad["adset_name"],
                 "campaign_name": ad["campaign_name"],
             }
 
     try:
-        adset_info = fetch_adset_statuses(config, cc_adset_ids)
+        adset_info = fetch_adset_statuses(config, target_adset_ids)
     except Exception as e:
         logger.error(f"Adset status fetch failed: {e}")
         adset_info = {}
@@ -223,8 +226,8 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
     adset_fail = 0
 
     for ad_id, ad in today_ads.items():
-        # Only CC campaigns
-        if not _is_cc_campaign(ad["campaign_name"]):
+        # Only target campaigns (CC or VALUE)
+        if not _is_target_campaign(ad["campaign_name"]):
             continue
 
         info = ad_info.get(ad_id, {})
@@ -311,7 +314,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             adset_purchases[ad["adset_id"]] += ad["purchases"]
 
     # Adset-level stop-loss / restart
-    for adset_id in cc_adset_ids:
+    for adset_id in target_adset_ids:
         data = adset_roas.get(adset_id, {})
         spend = data.get("spend", 0)
         revenue = data.get("revenue", 0)
@@ -435,7 +438,7 @@ def build_stop_loss_slack_message(
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* " + " │ ".join(summary_parts) + "\n"
-            f"_Rules: CC campaigns │ Today's metrics_\n"
+            f"_Rules: CC or VALUE campaigns │ Today's metrics_\n"
             f"_Ad stop: spend>${STOP_SPEND_THRESHOLD:.0f} & ROAS<{STOP_ROAS_THRESHOLD} & adset ROAS<{STOP_ADSET_ROAS_THRESHOLD}_\n"
             f"_Ad restart: spend>${RESTART_SPEND_THRESHOLD:.0f} & ROAS>{RESTART_ROAS_THRESHOLD}_\n"
             f"_Adset stop: spend>${ADSET_STOP_SPEND_THRESHOLD:.0f} & ROAS<{ADSET_STOP_ROAS_THRESHOLD}_\n"
