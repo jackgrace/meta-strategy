@@ -218,16 +218,37 @@ def _run_daily_scheduler():
                 logger.error(f"Retry also failed: {e2}")
 
 
+def _send_stop_loss_failure(error_msg: str):
+    """Notify Slack when a stop-loss run fails."""
+    webhook = os.environ.get("SLACK_WEBHOOK_URL")
+    if not webhook:
+        return
+    try:
+        now = datetime.now(AEST).strftime("%d %b %H:%M AEST")
+        requests.post(webhook, json={
+            "blocks": [
+                {"type": "header", "text": {"type": "plain_text", "text": f"❌ Stop-loss run failed — {now}"}},
+                {"type": "section", "text": {"type": "mrkdwn", "text": f"```{error_msg[:500]}```\nWill retry in 15 minutes."}},
+            ]
+        }, timeout=10)
+    except Exception:
+        pass
+
+
 def _run_stop_loss_scheduler():
-    """Background thread: runs the stop-loss check every 15 minutes."""
-    # Small initial delay so the server is up first
-    time.sleep(30)
+    """Background thread: runs the stop-loss check every 15 minutes. Forever."""
+    time.sleep(30)  # let server come up first
+    consecutive_failures = 0
     while True:
         try:
             logger.info("Scheduler: running 15-min stop-loss check")
             run_stop_loss()
+            consecutive_failures = 0
         except Exception as e:
-            logger.error(f"Stop-loss check failed: {e}")
+            consecutive_failures += 1
+            logger.error(f"Stop-loss check failed (consecutive: {consecutive_failures}): {e}")
+            # Notify on every failure so you know immediately
+            _send_stop_loss_failure(f"{type(e).__name__}: {e}")
         time.sleep(15 * 60)
 
 
