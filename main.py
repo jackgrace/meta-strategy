@@ -112,18 +112,21 @@ def main():
 
 
 def run_stop_loss() -> dict:
-    """Intra-day stop-loss + restart check. Live unless AUTO_PAUSE_ENABLED != 'true'."""
+    """Intra-day stop-loss + restart check (ads + adsets). Live unless AUTO_PAUSE_ENABLED != 'true'."""
     import os
     dry_run = os.environ.get("AUTO_PAUSE_ENABLED", "").lower() != "true"
     config = Config.from_env()
-    actions = _run_stop_loss(config, dry_run=dry_run)
-    send_stop_loss_report(actions, dry_run, config)
+    ad_actions, adset_actions = _run_stop_loss(config, dry_run=dry_run)
+    send_stop_loss_report(ad_actions, adset_actions, dry_run, config)
     return {
         "status": "ok",
         "mode": "DRY RUN" if dry_run else "LIVE",
-        "paused": sum(1 for a in actions if a.action == "paused"),
-        "activated": sum(1 for a in actions if a.action == "activated"),
-        "failed": sum(1 for a in actions if a.action == "failed"),
+        "ads_paused": sum(1 for a in ad_actions if a.action == "paused"),
+        "ads_activated": sum(1 for a in ad_actions if a.action == "activated"),
+        "ads_failed": sum(1 for a in ad_actions if a.action == "failed"),
+        "adsets_paused": sum(1 for a in adset_actions if a.action == "paused"),
+        "adsets_activated": sum(1 for a in adset_actions if a.action == "activated"),
+        "adsets_failed": sum(1 for a in adset_actions if a.action == "failed"),
     }
 
 

@@ -312,3 +312,48 @@ def fetch_ad_statuses(config: Config, ad_ids: set[str] | None = None) -> dict[st
 
     logger.info(f"Fetched ad info for {len(ad_info)} ads across {page_count} pages")
     return ad_info
+
+
+def fetch_adset_statuses(config: Config, adset_ids: set[str]) -> dict[str, dict]:
+    """Batch fetch effective_status and name for adsets."""
+    statuses: dict[str, dict] = {}
+    if not adset_ids:
+        return statuses
+
+    id_list = list(adset_ids)
+    batch_size = 50
+    for i in range(0, len(id_list), batch_size):
+        batch = id_list[i:i + batch_size]
+        url = f"{API_BASE}/"
+        params = {
+            "access_token": config.meta_access_token,
+            "ids": ",".join(batch),
+            "fields": "effective_status,name",
+        }
+
+        resp = None
+        for attempt in range(4):
+            try:
+                resp = requests.get(url, params=params, timeout=60)
+                if resp.status_code in (403, 500, 502, 503, 504) and attempt < 3:
+                    time.sleep(2 ** (attempt + 1))
+                    continue
+                if not resp.ok:
+                    logger.error(f"Batch adset status error {resp.status_code}: {resp.text[:300]}")
+                resp.raise_for_status()
+                break
+            except requests.exceptions.Timeout:
+                if attempt < 3:
+                    time.sleep(2 ** (attempt + 1))
+                else:
+                    raise
+
+        data = resp.json()
+        for adset_id, adset_data in data.items():
+            statuses[adset_id] = {
+                "status": adset_data.get("effective_status", "UNKNOWN"),
+                "name": adset_data.get("name", "Unknown"),
+            }
+
+    logger.info(f"Fetched adset info for {len(statuses)} adsets")
+    return statuses

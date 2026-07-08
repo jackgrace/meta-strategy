@@ -24,7 +24,7 @@ from collections import defaultdict
 
 import requests
 
-from meta_api import API_BASE, fetch_ad_statuses
+from meta_api import API_BASE, fetch_ad_statuses, fetch_adset_statuses
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,12 @@ STOP_ADSET_ROAS_THRESHOLD = 1.6
 
 RESTART_SPEND_THRESHOLD = 1.0
 RESTART_ROAS_THRESHOLD = 1.6
+
+# Adset-level thresholds
+ADSET_STOP_SPEND_THRESHOLD = 700.0
+ADSET_STOP_ROAS_THRESHOLD = 1.6
+ADSET_RESTART_SPEND_THRESHOLD = 700.0
+ADSET_RESTART_ROAS_THRESHOLD = 1.6
 
 
 @dataclass
@@ -53,6 +59,19 @@ class StopLossAction:
     purchases: int
     adset_spend: float
     adset_roas: float
+
+
+@dataclass
+class AdsetAction:
+    adset_id: str
+    adset_name: str
+    campaign_name: str
+    action: str  # "would_pause" | "paused" | "would_activate" | "activated" | "failed"
+    reason: str
+    spend: float
+    revenue: float
+    roas: float
+    purchases: int
 
 
 def _fetch_today_metrics(config: Config) -> dict:
@@ -152,10 +171,10 @@ def _is_cc_campaign(campaign_name: str) -> bool:
     return "CC" in parts
 
 
-def run_stop_loss(config: Config, dry_run: bool = False) -> list[StopLossAction]:
+def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossAction], list[AdsetAction]]:
     """
-    Run intra-day stop-loss and restart checks.
-    Returns list of actions taken.
+    Run intra-day stop-loss and restart checks at both ad and adset level.
+    Returns (ad_actions, adset_actions).
     """
     mode = "DRY RUN" if dry_run else "LIVE"
     logger.info(f"=== Stop-loss check [{mode}] ===")
@@ -164,7 +183,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> list[StopLossAction]
     today_ads = _fetch_today_metrics(config)
     if not today_ads:
         logger.info("No ad data for today")
-        return []
+        return [], []
 
     # Compute adset ROAS
     adset_roas = _compute_adset_roas(today_ads)
@@ -174,13 +193,34 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> list[StopLossAction]
     try:
         ad_info = fetch_ad_statuses(config, ad_ids=ad_ids)
     except Exception as e:
-        logger.error(f"Status fetch failed: {e}")
-        return []
+        logger.error(f"Ad status fetch failed: {e}")
+        return [], []
+
+    # Fetch statuses for CC-campaign adsets
+    cc_adset_ids: set[str] = set()
+    adset_meta: dict[str, dict] = {}
+    for ad in today_ads.values():
+        if _is_cc_campaign(ad["campaign_name"]) and ad["adset_id"]:
+            cc_adset_ids.add(ad["adset_id"])
+            adset_meta[ad["adset_id"]] = {
+                "adset_name": ad["adset_name"],
+                "campaign_name": ad["campaign_name"],
+            }
+
+    try:
+        adset_info = fetch_adset_statuses(config, cc_adset_ids)
+    except Exception as e:
+        logger.error(f"Adset status fetch failed: {e}")
+        adset_info = {}
 
     actions: list[StopLossAction] = []
+    adset_actions: list[AdsetAction] = []
     stop_count = 0
     restart_count = 0
     fail_count = 0
+    adset_stop = 0
+    adset_restart = 0
+    adset_fail = 0
 
     for ad_id, ad in today_ads.items():
         # Only CC campaigns
@@ -264,24 +304,114 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> list[StopLossAction]
                 adset_roas=adset_r,
             ))
 
-    logger.info(f"Stop-loss complete: {stop_count} paused, {restart_count} activated, {fail_count} failed")
-    return actions
+    # Aggregate today's purchases per adset for adset-level rules
+    adset_purchases: dict[str, int] = defaultdict(int)
+    for ad in today_ads.values():
+        if ad["adset_id"]:
+            adset_purchases[ad["adset_id"]] += ad["purchases"]
+
+    # Adset-level stop-loss / restart
+    for adset_id in cc_adset_ids:
+        data = adset_roas.get(adset_id, {})
+        spend = data.get("spend", 0)
+        revenue = data.get("revenue", 0)
+        roas = data.get("roas", 0)
+        purchases = adset_purchases.get(adset_id, 0)
+
+        info = adset_info.get(adset_id, {})
+        status = info.get("status", "UNKNOWN")
+        current_name = info.get("name", adset_meta[adset_id]["adset_name"])
+
+        # STOP-LOSS: ACTIVE + spend > $700 + ROAS < 1.6
+        if (status == "ACTIVE"
+            and spend > ADSET_STOP_SPEND_THRESHOLD
+            and roas < ADSET_STOP_ROAS_THRESHOLD):
+
+            if dry_run:
+                action, reason = "would_pause", "dry run"
+            else:
+                success, reason = _update_ad_status(config, adset_id, "PAUSED")
+                if success:
+                    action = "paused"
+                    adset_stop += 1
+                    logger.info(f"ADSET STOP-LOSS: Paused {adset_id} ({current_name}) — spend ${spend:.2f}, ROAS {roas:.2f}")
+                else:
+                    action = "failed"
+                    adset_fail += 1
+                    logger.warning(f"ADSET STOP-LOSS: Failed to pause {adset_id}: {reason}")
+
+            adset_actions.append(AdsetAction(
+                adset_id=adset_id,
+                adset_name=current_name,
+                campaign_name=adset_meta[adset_id]["campaign_name"],
+                action=action,
+                reason=reason,
+                spend=spend,
+                revenue=revenue,
+                roas=roas,
+                purchases=purchases,
+            ))
+            continue
+
+        # RESTART: PAUSED + spend > $700 + ROAS > 1.6
+        if (status != "ACTIVE"
+            and spend > ADSET_RESTART_SPEND_THRESHOLD
+            and roas > ADSET_RESTART_ROAS_THRESHOLD):
+
+            if dry_run:
+                action, reason = "would_activate", "dry run"
+            else:
+                success, reason = _update_ad_status(config, adset_id, "ACTIVE")
+                if success:
+                    action = "activated"
+                    adset_restart += 1
+                    logger.info(f"ADSET RESTART: Activated {adset_id} ({current_name}) — spend ${spend:.2f}, ROAS {roas:.2f}")
+                else:
+                    action = "failed"
+                    adset_fail += 1
+                    logger.warning(f"ADSET RESTART: Failed to activate {adset_id}: {reason}")
+
+            adset_actions.append(AdsetAction(
+                adset_id=adset_id,
+                adset_name=current_name,
+                campaign_name=adset_meta[adset_id]["campaign_name"],
+                action=action,
+                reason=reason,
+                spend=spend,
+                revenue=revenue,
+                roas=roas,
+                purchases=purchases,
+            ))
+
+    logger.info(
+        f"Stop-loss complete: "
+        f"AD: {stop_count} paused, {restart_count} activated, {fail_count} failed │ "
+        f"ADSET: {adset_stop} paused, {adset_restart} activated, {adset_fail} failed"
+    )
+    return actions, adset_actions
 
 
-def build_stop_loss_slack_message(actions: list[StopLossAction], dry_run: bool) -> dict | None:
+def build_stop_loss_slack_message(
+    ad_actions: list[StopLossAction],
+    adset_actions: list[AdsetAction],
+    dry_run: bool,
+) -> dict | None:
     """
-    Build the intra-day Slack message.
-    If no actions, still send a compact status update so you know it ran.
+    Build intra-day Slack message combining ad + adset actions.
+    Returns None when nothing happened (keeps the channel quiet).
     """
     now = datetime.now(AEST).strftime("%d %b %H:%M AEST")
     mode = "DRY RUN" if dry_run else "LIVE"
 
-    paused = [a for a in actions if a.action in ("paused", "would_pause")]
-    activated = [a for a in actions if a.action in ("activated", "would_activate")]
-    failed = [a for a in actions if a.action == "failed"]
+    ad_paused = [a for a in ad_actions if a.action in ("paused", "would_pause")]
+    ad_activated = [a for a in ad_actions if a.action in ("activated", "would_activate")]
+    ad_failed = [a for a in ad_actions if a.action == "failed"]
 
-    # No actions taken → quiet check-in (only send if failures)
-    if not paused and not activated and not failed:
+    as_paused = [a for a in adset_actions if a.action in ("paused", "would_pause")]
+    as_activated = [a for a in adset_actions if a.action in ("activated", "would_activate")]
+    as_failed = [a for a in adset_actions if a.action == "failed"]
+
+    if not (ad_paused or ad_activated or ad_failed or as_paused or as_activated or as_failed):
         return None
 
     blocks = []
@@ -291,28 +421,33 @@ def build_stop_loss_slack_message(actions: list[StopLossAction], dry_run: bool) 
     })
 
     summary_parts = []
-    if paused:
-        summary_parts.append(f"🔴 {len(paused)} paused")
-    if activated:
-        summary_parts.append(f"🟢 {len(activated)} activated")
-    if failed:
-        summary_parts.append(f"⚠️ {len(failed)} failed")
+    ad_total_p = len(ad_paused) + len(as_paused)
+    ad_total_a = len(ad_activated) + len(as_activated)
+    ad_total_f = len(ad_failed) + len(as_failed)
+    if ad_total_p:
+        summary_parts.append(f"🔴 {ad_total_p} paused")
+    if ad_total_a:
+        summary_parts.append(f"🟢 {ad_total_a} activated")
+    if ad_total_f:
+        summary_parts.append(f"⚠️ {ad_total_f} failed")
 
     blocks.append({
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* " + " │ ".join(summary_parts) + "\n"
-            f"_Rule: CC campaigns │ Today's metrics │ "
-            f"Stop: spend>${STOP_SPEND_THRESHOLD:.0f} & ROAS<{STOP_ROAS_THRESHOLD} & adset ROAS<{STOP_ADSET_ROAS_THRESHOLD} │ "
-            f"Restart: spend>${RESTART_SPEND_THRESHOLD:.0f} & ROAS>{RESTART_ROAS_THRESHOLD}_"
+            f"_Rules: CC campaigns │ Today's metrics_\n"
+            f"_Ad stop: spend>${STOP_SPEND_THRESHOLD:.0f} & ROAS<{STOP_ROAS_THRESHOLD} & adset ROAS<{STOP_ADSET_ROAS_THRESHOLD}_\n"
+            f"_Ad restart: spend>${RESTART_SPEND_THRESHOLD:.0f} & ROAS>{RESTART_ROAS_THRESHOLD}_\n"
+            f"_Adset stop: spend>${ADSET_STOP_SPEND_THRESHOLD:.0f} & ROAS<{ADSET_STOP_ROAS_THRESHOLD}_\n"
+            f"_Adset restart: spend>${ADSET_RESTART_SPEND_THRESHOLD:.0f} & ROAS>{ADSET_RESTART_ROAS_THRESHOLD}_"
         )}
     })
 
     blocks.append({"type": "divider"})
 
-    MAX_DISPLAY = 15
+    MAX_DISPLAY = 10
 
-    def _format_action(a: StopLossAction, emoji: str) -> str:
+    def _format_ad(a: StopLossAction, emoji: str) -> str:
         cpa_line = ""
         if a.purchases > 0:
             cpa = a.spend / a.purchases
@@ -324,36 +459,51 @@ def build_stop_loss_slack_message(actions: list[StopLossAction], dry_run: bool) 
             f"Adset: spend ${a.adset_spend:.2f} │ ROAS {a.adset_roas:.2f}x"
         )
 
-    if paused:
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "🔴 *Paused (stop-loss triggered)*"}})
-        for a in paused[:MAX_DISPLAY]:
-            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": _format_action(a, "🔴")}})
-        overflow = len(paused) - min(MAX_DISPLAY, len(paused))
+    def _format_adset(a: AdsetAction, emoji: str) -> str:
+        cpa_line = ""
+        if a.purchases > 0:
+            cpa = a.spend / a.purchases
+            cpa_line = f" │ CPA: ${cpa:.2f}"
+        return (
+            f"{emoji} *Adset: {a.adset_name}*\n"
+            f"Campaign: `{a.campaign_name}`\n"
+            f"Spend ${a.spend:.2f} │ ROAS {a.roas:.2f}x │ Rev ${a.revenue:.2f} │ {a.purchases} purchases{cpa_line}"
+        )
+
+    def _add_section(title: str, items: list, formatter):
+        if not items:
+            return
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": title}})
+        for a in items[:MAX_DISPLAY]:
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": formatter(a)}})
+        overflow = len(items) - min(MAX_DISPLAY, len(items))
         if overflow > 0:
             blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f"_+{overflow} more_"}]})
         blocks.append({"type": "divider"})
 
-    if activated:
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "🟢 *Activated (restart triggered)*"}})
-        for a in activated[:MAX_DISPLAY]:
-            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": _format_action(a, "🟢")}})
-        overflow = len(activated) - min(MAX_DISPLAY, len(activated))
-        if overflow > 0:
-            blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f"_+{overflow} more_"}]})
-        blocks.append({"type": "divider"})
+    _add_section("🔴 *Adsets paused (stop-loss)*", as_paused, lambda a: _format_adset(a, "🔴"))
+    _add_section("🟢 *Adsets activated (restart)*", as_activated, lambda a: _format_adset(a, "🟢"))
+    _add_section("🔴 *Ads paused (stop-loss)*", ad_paused, lambda a: _format_ad(a, "🔴"))
+    _add_section("🟢 *Ads activated (restart)*", ad_activated, lambda a: _format_ad(a, "🟢"))
 
-    if failed:
+    if ad_failed or as_failed:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "⚠️ *Failed (needs manual action)*"}})
-        for a in failed[:MAX_DISPLAY]:
-            lines = _format_action(a, "⚠️") + f"\n_{a.reason}_"
-            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": lines}})
+        for a in as_failed[:MAX_DISPLAY]:
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": _format_adset(a, "⚠️") + f"\n_{a.reason}_"}})
+        for a in ad_failed[:MAX_DISPLAY]:
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": _format_ad(a, "⚠️") + f"\n_{a.reason}_"}})
 
     return {"blocks": blocks}
 
 
-def send_stop_loss_report(actions: list[StopLossAction], dry_run: bool, config: Config) -> bool:
+def send_stop_loss_report(
+    ad_actions: list[StopLossAction],
+    adset_actions: list[AdsetAction],
+    dry_run: bool,
+    config: Config,
+) -> bool:
     """Send stop-loss report to Slack. Quiet if nothing happened."""
-    payload = build_stop_loss_slack_message(actions, dry_run)
+    payload = build_stop_loss_slack_message(ad_actions, adset_actions, dry_run)
     if payload is None:
         return True
 
