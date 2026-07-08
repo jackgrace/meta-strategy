@@ -19,7 +19,7 @@ from urllib.parse import parse_qs
 
 import requests
 
-from main import run_check, run_fatigue_only, run_auto_pause
+from main import run_check, run_fatigue_only, run_auto_pause, run_stop_loss
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._run_pause(source="http")
         elif self.path == "/pause/test":
             self._test_pause(source="http")
+        elif self.path == "/stoploss":
+            self._run_stop_loss_endpoint(source="http")
         else:
             self._respond(404, {"error": "not found"})
 
@@ -49,6 +51,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._handle_slack(run_fatigue_only, "Running fatigue check now...")
         elif self.path == "/slack/pause":
             self._handle_slack(run_auto_pause, "Running auto-pause check now...")
+        elif self.path == "/slack/stoploss":
+            self._handle_slack(run_stop_loss, "Running stop-loss check now...")
         elif self.path == "/run":
             self._run_check(source="http")
         elif self.path == "/fatigue":
@@ -96,6 +100,15 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(200, result)
         except Exception as e:
             logger.error(f"Auto-pause check failed: {e}")
+            self._respond(500, {"status": "error", "message": str(e)})
+
+    def _run_stop_loss_endpoint(self, source: str):
+        logger.info(f"Manual trigger via {source} — stop-loss")
+        try:
+            result = run_stop_loss()
+            self._respond(200, result)
+        except Exception as e:
+            logger.error(f"Stop-loss check failed: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
 
     def _test_pause(self, source: str):
@@ -205,22 +218,42 @@ def _run_daily_scheduler():
                 logger.error(f"Retry also failed: {e2}")
 
 
+def _run_stop_loss_scheduler():
+    """Background thread: runs the stop-loss check every 15 minutes."""
+    # Small initial delay so the server is up first
+    time.sleep(30)
+    while True:
+        try:
+            logger.info("Scheduler: running 15-min stop-loss check")
+            run_stop_loss()
+        except Exception as e:
+            logger.error(f"Stop-loss check failed: {e}")
+        time.sleep(15 * 60)
+
+
 def start_server():
     port = int(os.environ.get("PORT", 8080))
 
     # Start daily scheduler in background
     scheduler = threading.Thread(target=_run_daily_scheduler, daemon=True)
     scheduler.start()
-    logger.info("Daily scheduler started (midnight AEST)")
+    logger.info("Daily scheduler started (1am AEST)")
+
+    # Start 15-min stop-loss scheduler
+    stop_loss_thread = threading.Thread(target=_run_stop_loss_scheduler, daemon=True)
+    stop_loss_thread.start()
+    logger.info("Stop-loss scheduler started (every 15 min)")
 
     server = HTTPServer(("0.0.0.0", port), TriggerHandler)
     logger.info(f"Server listening on port {port}")
     logger.info(f"  GET  /run            — run all checks")
     logger.info(f"  GET  /fatigue        — fatigue check only")
     logger.info(f"  GET  /pause          — auto-pause dry run")
+    logger.info(f"  GET  /stoploss       — intra-day stop-loss")
     logger.info(f"  POST /slack/trigger  — Slack: all checks")
     logger.info(f"  POST /slack/fatigue  — Slack: fatigue only")
     logger.info(f"  POST /slack/pause    — Slack: auto-pause")
+    logger.info(f"  POST /slack/stoploss — Slack: stop-loss")
     logger.info(f"  GET  /health         — health check")
     server.serve_forever()
 

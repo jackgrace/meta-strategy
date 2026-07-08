@@ -12,6 +12,7 @@ from meta_api import fetch_ad_insights, fetch_ad_statuses
 from testing_analyzer import analyze_testing_missed_opportunities
 from early_fatigue import analyze_early_fatigue
 from auto_pause import find_pause_candidates, execute_pause, send_pause_report
+from stop_loss import run_stop_loss as _run_stop_loss, send_stop_loss_report
 from slack_reporter import send_testing_missed_opps, send_early_fatigue_report
 
 logging.basicConfig(
@@ -108,6 +109,22 @@ def main():
 
     if result.get("status") == "error":
         sys.exit(1)
+
+
+def run_stop_loss() -> dict:
+    """Intra-day stop-loss + restart check. Live unless AUTO_PAUSE_ENABLED != 'true'."""
+    import os
+    dry_run = os.environ.get("AUTO_PAUSE_ENABLED", "").lower() != "true"
+    config = Config.from_env()
+    actions = _run_stop_loss(config, dry_run=dry_run)
+    send_stop_loss_report(actions, dry_run, config)
+    return {
+        "status": "ok",
+        "mode": "DRY RUN" if dry_run else "LIVE",
+        "paused": sum(1 for a in actions if a.action == "paused"),
+        "activated": sum(1 for a in actions if a.action == "activated"),
+        "failed": sum(1 for a in actions if a.action == "failed"),
+    }
 
 
 if __name__ == "__main__":
