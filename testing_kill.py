@@ -1,15 +1,17 @@
 """
 Testing campaign kill rule.
 
-Runs daily.
+Runs hourly.
+
+Timeframe: last 30 days.
 
 PAUSE ad IF:
 - Campaign name contains 'TESTING'
+- Adset name does NOT contain 'OFF'
 - Ad is currently ACTIVE
-- Ad name does NOT contain 'OFF'
-- Lifetime spend > $20
+- 30-day spend > $20
 - AND EITHER:
-    * Ad has 0 lifetime ATCs
+    * Ad has 0 ATCs (in last 30d)
     * OR (cost per ATC > $8 AND ROAS < 1.6)
 """
 
@@ -27,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 AEST = timezone(timedelta(hours=10))
 
-MIN_LIFETIME_SPEND = 20.0
+MIN_SPEND_30D = 20.0
 MAX_COST_PER_ATC = 8.0
 MIN_ROAS = 1.6
 
@@ -50,17 +52,14 @@ class TestingKillAction:
 
 def _fetch_lifetime_insights(config: Config) -> dict:
     """
-    Fetch ad-level insights for ACTIVE ads over the last 90 days.
-    Uses last_90d because date_preset=maximum triggers Meta's
-    "too much data" 400 error on accounts with lots of history.
-    90 days is plenty for testing-campaign evaluation.
+    Fetch ad-level insights for ACTIVE ads over the last 30 days.
     """
     url = f"{API_BASE}/{config.meta_ad_account_id}/insights"
     params = {
         "access_token": config.meta_access_token,
         "level": "ad",
         "fields": "ad_id,ad_name,campaign_name,adset_name,spend,actions,action_values,cost_per_action_type",
-        "date_preset": "last_90d",
+        "date_preset": "last_30d",
         "limit": 200,
         "filtering": '[{"field":"ad.effective_status","operator":"IN","value":["ACTIVE","IN_REVIEW","WITH_ISSUES"]}]',
     }
@@ -202,12 +201,12 @@ def run_testing_kill(config: Config, dry_run: bool = False) -> list[TestingKillA
         if "TESTING" not in ad["campaign_name"].upper():
             continue
 
-        # Skip ads already marked OFF
-        if "OFF" in ad["ad_name"].upper():
+        # Skip if adset name contains OFF
+        if "OFF" in ad["adset_name"].upper():
             continue
 
-        # Lifetime spend gate
-        if ad["spend"] <= MIN_LIFETIME_SPEND:
+        # 30-day spend gate
+        if ad["spend"] <= MIN_SPEND_30D:
             continue
 
         considered += 1
@@ -286,9 +285,9 @@ def build_testing_kill_message(actions: list[TestingKillAction], dry_run: bool) 
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* " + " │ ".join(summary_parts) + "\n"
-            f"_Rule: TESTING campaign │ lifetime spend > ${MIN_LIFETIME_SPEND:.0f} │ "
+            f"_Rule: TESTING campaign │ adset name not OFF │ 30d spend > ${MIN_SPEND_30D:.0f} │ "
             f"(0 ATCs) OR (CPA/ATC > ${MAX_COST_PER_ATC:.0f} & ROAS < {MIN_ROAS})_\n"
-            f"Total lifetime spend on flagged ads: *${total_spend:.2f}*"
+            f"Total 30d spend on flagged ads: *${total_spend:.2f}*"
         )}
     })
 
@@ -301,7 +300,7 @@ def build_testing_kill_message(actions: list[TestingKillAction], dry_run: bool) 
         return (
             f"{emoji} *{a.ad_name}*\n"
             f"Campaign: `{a.campaign_name}` │ Adset: `{a.adset_name}`\n"
-            f"Lifetime: spend ${a.lifetime_spend:.2f} │ rev ${a.lifetime_revenue:.2f} │ ROAS {a.lifetime_roas:.2f}x │ {a.lifetime_purchases} purchases │ {a.lifetime_atcs} ATCs │ CPA/ATC {cpa_txt}\n"
+            f"30d: spend ${a.lifetime_spend:.2f} │ rev ${a.lifetime_revenue:.2f} │ ROAS {a.lifetime_roas:.2f}x │ {a.lifetime_purchases} purchases │ {a.lifetime_atcs} ATCs │ CPA/ATC {cpa_txt}\n"
             f"_Why: {a.reason}_"
         )
 
