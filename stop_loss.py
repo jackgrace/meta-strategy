@@ -18,6 +18,7 @@ RESTART (turn ON):
 """
 
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
@@ -90,7 +91,33 @@ def _fetch_today_metrics(config: Config) -> dict:
 
     while url:
         page_count += 1
-        resp = requests.get(url, params=params if page_count == 1 else None, timeout=60)
+
+        # Retry with backoff on timeouts and transient errors
+        resp = None
+        for attempt in range(4):
+            try:
+                resp = requests.get(url, params=params if page_count == 1 else None, timeout=120)
+                if resp.status_code in (403, 500, 502, 503, 504) and attempt < 3:
+                    wait = [15, 30, 60][attempt]
+                    logger.warning(f"Stop-loss fetch {resp.status_code}, retrying in {wait}s (attempt {attempt + 1}/4)")
+                    time.sleep(wait)
+                    continue
+                break
+            except requests.exceptions.Timeout:
+                if attempt < 3:
+                    wait = [15, 30, 60][attempt]
+                    logger.warning(f"Stop-loss fetch timeout, retrying in {wait}s (attempt {attempt + 1}/4)")
+                    time.sleep(wait)
+                else:
+                    raise
+            except requests.exceptions.ConnectionError as e:
+                if attempt < 3:
+                    wait = [15, 30, 60][attempt]
+                    logger.warning(f"Stop-loss fetch connection error, retrying in {wait}s: {e}")
+                    time.sleep(wait)
+                else:
+                    raise
+
         if not resp.ok:
             logger.error(f"Stop-loss metrics fetch error {resp.status_code}: {resp.text[:300]}")
             resp.raise_for_status()
@@ -145,14 +172,29 @@ def _compute_adset_roas(ads: dict) -> dict:
 
 
 def _update_ad_status(config: Config, ad_id: str, new_status: str) -> tuple[bool, str]:
-    """Send status update to Meta. Returns (success, reason_or_message)."""
+    """Send status update to Meta with retry. Returns (success, reason_or_message)."""
     url = f"{API_BASE}/{ad_id}"
+    resp = None
     try:
-        resp = requests.post(
-            f"{url}?access_token={config.meta_access_token}",
-            data={"status": new_status},
-            timeout=30,
-        )
+        for attempt in range(3):
+            try:
+                resp = requests.post(
+                    f"{url}?access_token={config.meta_access_token}",
+                    data={"status": new_status},
+                    timeout=60,
+                )
+                if resp.status_code in (500, 502, 503, 504) and attempt < 2:
+                    time.sleep([5, 15][attempt])
+                    continue
+                break
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+                if attempt < 2:
+                    time.sleep([5, 15][attempt])
+                else:
+                    raise
+
+        if resp is None:
+            return False, "no response"
         if resp.ok:
             return True, "ok"
         try:
