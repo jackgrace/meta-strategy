@@ -267,7 +267,13 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
     adset_restart = 0
     adset_fail = 0
 
+    # Ad-level stop-loss disabled by default. Set STOP_LOSS_ADS=true to enable.
+    import os
+    ad_level_enabled = os.environ.get("STOP_LOSS_ADS", "").lower() == "true"
+
     for ad_id, ad in today_ads.items():
+        if not ad_level_enabled:
+            break
         # Only target campaigns (CC or VALUE)
         if not _is_target_campaign(ad["campaign_name"]):
             continue
@@ -428,9 +434,9 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 purchases=purchases,
             ))
 
+    ad_label = f"AD: {stop_count} paused, {restart_count} activated, {fail_count} failed" if ad_level_enabled else "AD: disabled"
     logger.info(
-        f"Stop-loss complete: "
-        f"AD: {stop_count} paused, {restart_count} activated, {fail_count} failed │ "
+        f"Stop-loss complete: {ad_label} │ "
         f"ADSET: {adset_stop} paused, {adset_restart} activated, {adset_fail} failed"
     )
     return actions, adset_actions
