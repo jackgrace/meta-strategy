@@ -39,6 +39,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._run_pause(source="http")
         elif self.path == "/pause/test":
             self._test_pause(source="http")
+        elif self.path.startswith("/activate"):
+            self._manual_activate()
         elif self.path == "/stoploss":
             self._run_stop_loss_endpoint(source="http")
         else:
@@ -109,6 +111,42 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(200, result)
         except Exception as e:
             logger.error(f"Stop-loss check failed: {e}")
+            self._respond(500, {"status": "error", "message": str(e)})
+
+    def _manual_activate(self):
+        """Manually turn ON an ad or adset by ID: /activate?id=<meta_id>"""
+        from urllib.parse import urlparse, parse_qs
+        from meta_api import API_BASE
+        from config import Config
+
+        qs = parse_qs(urlparse(self.path).query)
+        obj_id = (qs.get("id") or [""])[0].strip()
+
+        if not obj_id:
+            self._respond(400, {"error": "missing ?id=<meta_id> query parameter"})
+            return
+
+        logger.info(f"Manual activate request for {obj_id}")
+        try:
+            config = Config.from_env()
+            resp = requests.post(
+                f"{API_BASE}/{obj_id}?access_token={config.meta_access_token}",
+                data={"status": "ACTIVE"},
+                timeout=60,
+            )
+            if resp.ok:
+                logger.info(f"Manually activated {obj_id}")
+                self._respond(200, {"status": "ok", "id": obj_id, "action": "activated"})
+            else:
+                try:
+                    err = resp.json().get("error", {})
+                    reason = err.get("error_user_title", err.get("message", "Unknown"))
+                except Exception:
+                    reason = f"HTTP {resp.status_code}"
+                logger.error(f"Failed to activate {obj_id}: {reason}")
+                self._respond(resp.status_code, {"status": "error", "id": obj_id, "reason": reason, "body": resp.text[:500]})
+        except Exception as e:
+            logger.error(f"Manual activate error: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
 
     def _test_pause(self, source: str):
@@ -271,6 +309,7 @@ def start_server():
     logger.info(f"  GET  /fatigue        — fatigue check only")
     logger.info(f"  GET  /pause          — auto-pause dry run")
     logger.info(f"  GET  /stoploss       — intra-day stop-loss")
+    logger.info(f"  GET  /activate?id=X  — manually reactivate an ad/adset")
     logger.info(f"  POST /slack/trigger  — Slack: all checks")
     logger.info(f"  POST /slack/fatigue  — Slack: fatigue only")
     logger.info(f"  POST /slack/pause    — Slack: auto-pause")
