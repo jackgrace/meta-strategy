@@ -267,13 +267,6 @@ def _run_daily_scheduler():
             except Exception as e2:
                 logger.error(f"Auto-pause retry also failed: {e2}")
 
-        # Testing-kill (independent — its own failure notification)
-        try:
-            run_testing_kill()
-        except Exception as e:
-            logger.error(f"Scheduled testing-kill failed: {e}")
-            _send_failure_notification(f"testing-kill: {e}")
-
 
 def _send_stop_loss_failure(error_msg: str):
     """Notify Slack when a stop-loss run fails."""
@@ -309,6 +302,22 @@ def _run_stop_loss_scheduler():
         time.sleep(15 * 60)
 
 
+def _run_testing_kill_scheduler():
+    """Background thread: runs the testing kill check every 1 hour. Forever."""
+    time.sleep(60)  # let server come up first, stagger from stop-loss
+    consecutive_failures = 0
+    while True:
+        try:
+            logger.info("Scheduler: running hourly testing-kill check")
+            run_testing_kill()
+            consecutive_failures = 0
+        except Exception as e:
+            consecutive_failures += 1
+            logger.error(f"Testing-kill check failed (consecutive: {consecutive_failures}): {e}")
+            _send_stop_loss_failure(f"testing-kill: {type(e).__name__}: {e}")
+        time.sleep(60 * 60)
+
+
 def start_server():
     port = int(os.environ.get("PORT", 8080))
 
@@ -321,6 +330,11 @@ def start_server():
     stop_loss_thread = threading.Thread(target=_run_stop_loss_scheduler, daemon=True)
     stop_loss_thread.start()
     logger.info("Stop-loss scheduler started (every 15 min)")
+
+    # Start hourly testing-kill scheduler
+    testing_kill_thread = threading.Thread(target=_run_testing_kill_scheduler, daemon=True)
+    testing_kill_thread.start()
+    logger.info("Testing-kill scheduler started (every 1 hour)")
 
     server = HTTPServer(("0.0.0.0", port), TriggerHandler)
     logger.info(f"Server listening on port {port}")
