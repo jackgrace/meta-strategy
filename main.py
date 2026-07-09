@@ -13,6 +13,7 @@ from testing_analyzer import analyze_testing_missed_opportunities
 from early_fatigue import analyze_early_fatigue
 from auto_pause import find_pause_candidates, execute_pause, send_pause_report
 from stop_loss import run_stop_loss as _run_stop_loss, send_stop_loss_report
+from testing_kill import run_testing_kill as _run_testing_kill, send_testing_kill_report
 from slack_reporter import send_testing_missed_opps, send_early_fatigue_report
 
 logging.basicConfig(
@@ -127,6 +128,22 @@ def run_stop_loss() -> dict:
         "adsets_paused": sum(1 for a in adset_actions if a.action == "paused"),
         "adsets_activated": sum(1 for a in adset_actions if a.action == "activated"),
         "adsets_failed": sum(1 for a in adset_actions if a.action == "failed"),
+    }
+
+
+def run_testing_kill() -> dict:
+    """Kill underperforming TESTING campaign ads. Live unless AUTO_PAUSE_ENABLED != 'true'."""
+    import os
+    dry_run = os.environ.get("AUTO_PAUSE_ENABLED", "").lower() != "true"
+    config = Config.from_env()
+    actions = _run_testing_kill(config, dry_run=dry_run)
+    send_testing_kill_report(actions, dry_run, config)
+    return {
+        "status": "ok",
+        "mode": "DRY RUN" if dry_run else "LIVE",
+        "paused": sum(1 for a in actions if a.action == "paused"),
+        "would_pause": sum(1 for a in actions if a.action == "would_pause"),
+        "failed": sum(1 for a in actions if a.action == "failed"),
     }
 
 

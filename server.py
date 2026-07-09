@@ -19,7 +19,7 @@ from urllib.parse import parse_qs
 
 import requests
 
-from main import run_check, run_fatigue_only, run_auto_pause, run_stop_loss
+from main import run_check, run_fatigue_only, run_auto_pause, run_stop_loss, run_testing_kill
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._manual_activate()
         elif self.path == "/stoploss":
             self._run_stop_loss_endpoint(source="http")
+        elif self.path == "/testing-kill":
+            self._run_testing_kill_endpoint(source="http")
         else:
             self._respond(404, {"error": "not found"})
 
@@ -55,6 +57,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._handle_slack(run_auto_pause, "Running auto-pause check now...")
         elif self.path == "/slack/stoploss":
             self._handle_slack(run_stop_loss, "Running stop-loss check now...")
+        elif self.path == "/slack/testing-kill":
+            self._handle_slack(run_testing_kill, "Running testing kill check now...")
         elif self.path == "/run":
             self._run_check(source="http")
         elif self.path == "/fatigue":
@@ -111,6 +115,15 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(200, result)
         except Exception as e:
             logger.error(f"Stop-loss check failed: {e}")
+            self._respond(500, {"status": "error", "message": str(e)})
+
+    def _run_testing_kill_endpoint(self, source: str):
+        logger.info(f"Manual trigger via {source} — testing kill")
+        try:
+            result = run_testing_kill()
+            self._respond(200, result)
+        except Exception as e:
+            logger.error(f"Testing kill check failed: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
 
     def _manual_activate(self):
@@ -240,20 +253,26 @@ def _run_daily_scheduler():
         time.sleep(wait_seconds)
 
         logger.info("Scheduler: running daily checks")
+
+        # Auto-pause (with a single 15-min retry on failure)
         try:
             run_check()
         except Exception as e:
-            logger.error(f"Scheduled check failed: {e}")
+            logger.error(f"Scheduled auto-pause failed: {e}")
             _send_failure_notification(str(e))
-
-            # Retry once after 15 minutes
-            logger.info("Scheduler: retrying in 15 minutes...")
+            logger.info("Scheduler: retrying auto-pause in 15 minutes...")
             time.sleep(900)
-            logger.info("Scheduler: retry attempt")
             try:
                 run_check()
             except Exception as e2:
-                logger.error(f"Retry also failed: {e2}")
+                logger.error(f"Auto-pause retry also failed: {e2}")
+
+        # Testing-kill (independent — its own failure notification)
+        try:
+            run_testing_kill()
+        except Exception as e:
+            logger.error(f"Scheduled testing-kill failed: {e}")
+            _send_failure_notification(f"testing-kill: {e}")
 
 
 def _send_stop_loss_failure(error_msg: str):
@@ -309,11 +328,13 @@ def start_server():
     logger.info(f"  GET  /fatigue        — fatigue check only")
     logger.info(f"  GET  /pause          — auto-pause dry run")
     logger.info(f"  GET  /stoploss       — intra-day stop-loss")
+    logger.info(f"  GET  /testing-kill   — testing campaign kill")
     logger.info(f"  GET  /activate?id=X  — manually reactivate an ad/adset")
     logger.info(f"  POST /slack/trigger  — Slack: all checks")
     logger.info(f"  POST /slack/fatigue  — Slack: fatigue only")
     logger.info(f"  POST /slack/pause    — Slack: auto-pause")
     logger.info(f"  POST /slack/stoploss — Slack: stop-loss")
+    logger.info(f"  POST /slack/testing-kill — Slack: testing kill")
     logger.info(f"  GET  /health         — health check")
     server.serve_forever()
 
