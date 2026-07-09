@@ -50,16 +50,18 @@ class TestingKillAction:
 
 def _fetch_lifetime_insights(config: Config) -> dict:
     """
-    Fetch lifetime ad-level insights for ACTIVE ads.
-    Returns dict ad_id -> metrics.
+    Fetch ad-level insights for ACTIVE ads over the last 90 days.
+    Uses last_90d because date_preset=maximum triggers Meta's
+    "too much data" 400 error on accounts with lots of history.
+    90 days is plenty for testing-campaign evaluation.
     """
     url = f"{API_BASE}/{config.meta_ad_account_id}/insights"
     params = {
         "access_token": config.meta_access_token,
         "level": "ad",
         "fields": "ad_id,ad_name,campaign_name,adset_name,spend,actions,action_values,cost_per_action_type",
-        "date_preset": "maximum",
-        "limit": 500,
+        "date_preset": "last_90d",
+        "limit": 200,
         "filtering": '[{"field":"ad.effective_status","operator":"IN","value":["ACTIVE","IN_REVIEW","WITH_ISSUES"]}]',
     }
 
@@ -73,9 +75,19 @@ def _fetch_lifetime_insights(config: Config) -> dict:
         for attempt in range(4):
             try:
                 resp = requests.get(url, params=params if page_count == 1 else None, timeout=120)
-                if resp.status_code in (403, 500, 502, 503, 504) and attempt < 3:
+
+                # Retry on server errors + Meta's transient 400 ("Service temporarily unavailable")
+                is_transient_400 = False
+                if resp.status_code == 400:
+                    try:
+                        err = resp.json().get("error", {})
+                        is_transient_400 = err.get("code") in (1, 2) or err.get("is_transient") is True
+                    except Exception:
+                        pass
+
+                if (resp.status_code in (403, 500, 502, 503, 504) or is_transient_400) and attempt < 3:
                     wait = [15, 30, 60][attempt]
-                    logger.warning(f"Lifetime fetch {resp.status_code}, retrying in {wait}s")
+                    logger.warning(f"Lifetime fetch {resp.status_code}, retrying in {wait}s (body: {resp.text[:200]})")
                     time.sleep(wait)
                     continue
                 break
@@ -88,7 +100,7 @@ def _fetch_lifetime_insights(config: Config) -> dict:
                     raise
 
         if not resp.ok:
-            logger.error(f"Lifetime insights fetch error {resp.status_code}: {resp.text[:300]}")
+            logger.error(f"Lifetime insights fetch error {resp.status_code}: {resp.text[:500]}")
             resp.raise_for_status()
 
         data = resp.json()
