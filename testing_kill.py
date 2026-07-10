@@ -8,6 +8,7 @@ Timeframe: last 30 days.
 PAUSE ad IF:
 - Campaign name contains 'TESTING'
 - Adset name does NOT contain 'OFF'
+- Ad name does NOT contain 'RUN'
 - Ad is currently ACTIVE
 - 30-day spend > $20
 - AND EITHER:
@@ -205,6 +206,10 @@ def run_testing_kill(config: Config, dry_run: bool = False) -> list[TestingKillA
         if "OFF" in ad["adset_name"].upper():
             continue
 
+        # Skip if ad name contains RUN
+        if "RUN" in ad["ad_name"].upper():
+            continue
+
         # 30-day spend gate
         if ad["spend"] <= MIN_SPEND_30D:
             continue
@@ -285,7 +290,7 @@ def build_testing_kill_message(actions: list[TestingKillAction], dry_run: bool) 
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* " + " │ ".join(summary_parts) + "\n"
-            f"_Rule: TESTING campaign │ adset name not OFF │ 30d spend > ${MIN_SPEND_30D:.0f} │ "
+            f"_Rule: TESTING campaign │ adset not OFF │ ad not RUN │ 30d spend > ${MIN_SPEND_30D:.0f} │ "
             f"(0 ATCs) OR (CPA/ATC > ${MAX_COST_PER_ATC:.0f} & ROAS < {MIN_ROAS})_\n"
             f"Total 30d spend on flagged ads: *${total_spend:.2f}*"
         )}
