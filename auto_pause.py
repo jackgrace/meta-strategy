@@ -2,7 +2,7 @@
 Auto-pause agent.
 
 Finds ads that are older than 14 days with less than $20 spend in the
-last 14 days, pauses them, and adds " - OFF" to the name.
+last 14 days, pauses them, and adds " - OFF-SPEND" to the name.
 
 Dry-run by default — set AUTO_PAUSE_ENABLED=true to go live.
 """
@@ -189,6 +189,7 @@ def execute_pause(candidates: list[PauseCandidate], config: Config, dry_run: boo
         url = f"{API_BASE}/{c.ad_id}"
 
         try:
+            # Step 1: pause
             resp = requests.post(
                 f"{url}?access_token={config.meta_access_token}",
                 data={"status": "PAUSED"},
@@ -204,8 +205,23 @@ def execute_pause(candidates: list[PauseCandidate], config: Config, dry_run: boo
                 logger.warning(f"Could not pause {c.ad_id}: {reason}")
                 continue
 
-            c.action_taken = "paused"
-            logger.info(f"Paused ad {c.ad_id} ({c.ad_name})")
+            # Step 2: rename with OFF-SPEND suffix (separate call to avoid creative validation)
+            new_name = f"{c.ad_name} - OFF-SPEND"
+            try:
+                rename_resp = requests.post(
+                    f"{url}?access_token={config.meta_access_token}",
+                    data={"name": new_name},
+                    timeout=30,
+                )
+                if rename_resp.ok:
+                    c.action_taken = "paused"
+                    logger.info(f"Paused ad {c.ad_id} ({c.ad_name} → {new_name})")
+                else:
+                    c.action_taken = "paused (rename failed)"
+                    logger.warning(f"Paused {c.ad_id} but rename failed: {rename_resp.text[:200]}")
+            except Exception as e:
+                c.action_taken = "paused (rename failed)"
+                logger.warning(f"Paused {c.ad_id} but rename raised: {e}")
         except Exception as e:
             c.action_taken = f"error: {str(e)[:100]}"
             logger.error(f"Error pausing {c.ad_id}: {e}")
