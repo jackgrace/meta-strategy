@@ -83,7 +83,7 @@ def _fetch_today_metrics(config: Config) -> dict:
         "level": "ad",
         "fields": "ad_id,ad_name,campaign_name,adset_id,adset_name,spend,actions,action_values",
         "date_preset": "today",
-        "limit": 500,
+        "limit": 200,
     }
 
     ads = {}
@@ -97,9 +97,20 @@ def _fetch_today_metrics(config: Config) -> dict:
         for attempt in range(4):
             try:
                 resp = requests.get(url, params=params if page_count == 1 else None, timeout=120)
-                if resp.status_code in (403, 500, 502, 503, 504) and attempt < 3:
+
+                # Meta occasionally returns transient errors as HTTP 400 with
+                # is_transient=true (e.g. "Service temporarily unavailable")
+                is_transient_400 = False
+                if resp.status_code == 400:
+                    try:
+                        err = resp.json().get("error", {})
+                        is_transient_400 = err.get("code") in (1, 2) or err.get("is_transient") is True
+                    except Exception:
+                        pass
+
+                if (resp.status_code in (403, 500, 502, 503, 504) or is_transient_400) and attempt < 3:
                     wait = [15, 30, 60][attempt]
-                    logger.warning(f"Stop-loss fetch {resp.status_code}, retrying in {wait}s (attempt {attempt + 1}/4)")
+                    logger.warning(f"Stop-loss fetch {resp.status_code}, retrying in {wait}s (attempt {attempt + 1}/4, body: {resp.text[:200]})")
                     time.sleep(wait)
                     continue
                 break
