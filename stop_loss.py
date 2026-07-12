@@ -95,44 +95,60 @@ def _fetch_today_metrics(config: Config) -> dict:
 
         # Retry with backoff on timeouts and transient errors
         resp = None
-        for attempt in range(4):
+        for attempt in range(5):
             try:
                 resp = requests.get(url, params=params if page_count == 1 else None, timeout=120)
 
-                # Meta occasionally returns transient errors as HTTP 400 with
-                # is_transient=true (e.g. "Service temporarily unavailable")
-                is_transient_400 = False
+                # Detect Meta's various retryable 400s:
+                # - is_transient=true
+                # - error codes: 1 (unknown), 2 (service unavailable), 4/17 (rate limits), 32 (page-level rate)
+                # - error subcodes 1504018 (timeout), 1487742 (rate)
+                # - message contains "temporarily", "limit reached", "load", "try again"
+                is_retryable_400 = False
                 if resp.status_code == 400:
                     try:
                         err = resp.json().get("error", {})
-                        is_transient_400 = err.get("code") in (1, 2) or err.get("is_transient") is True
+                        code = err.get("code")
+                        subcode = err.get("error_subcode")
+                        msg = (err.get("message", "") + " " + err.get("error_user_msg", "")).lower()
+                        is_retryable_400 = (
+                            err.get("is_transient") is True
+                            or code in (1, 2, 4, 17, 32)
+                            or subcode in (1504018, 1487742, 1504044)
+                            or any(k in msg for k in ("temporarily", "limit reached", "too many", "try again", "load", "unavailable"))
+                        )
                     except Exception:
                         pass
 
-                if (resp.status_code in (403, 500, 502, 503, 504) or is_transient_400) and attempt < 3:
-                    wait = [15, 30, 60][attempt]
-                    logger.warning(f"Stop-loss fetch {resp.status_code}, retrying in {wait}s (attempt {attempt + 1}/4, body: {resp.text[:200]})")
+                if (resp.status_code in (403, 500, 502, 503, 504) or is_retryable_400) and attempt < 4:
+                    wait = [30, 60, 120, 240][attempt]
+                    logger.warning(f"Stop-loss fetch {resp.status_code}, retrying in {wait}s (attempt {attempt + 1}/5, body: {resp.text[:200]})")
                     time.sleep(wait)
                     continue
                 break
             except requests.exceptions.Timeout:
-                if attempt < 3:
-                    wait = [15, 30, 60][attempt]
-                    logger.warning(f"Stop-loss fetch timeout, retrying in {wait}s (attempt {attempt + 1}/4)")
+                if attempt < 4:
+                    wait = [30, 60, 120, 240][attempt]
+                    logger.warning(f"Stop-loss fetch timeout, retrying in {wait}s (attempt {attempt + 1}/5)")
                     time.sleep(wait)
                 else:
                     raise
             except requests.exceptions.ConnectionError as e:
-                if attempt < 3:
-                    wait = [15, 30, 60][attempt]
+                if attempt < 4:
+                    wait = [30, 60, 120, 240][attempt]
                     logger.warning(f"Stop-loss fetch connection error, retrying in {wait}s: {e}")
                     time.sleep(wait)
                 else:
                     raise
 
         if not resp.ok:
-            logger.error(f"Stop-loss metrics fetch error {resp.status_code}: {resp.text[:300]}")
-            resp.raise_for_status()
+            # Include Meta's actual error body in the exception so it shows in Slack
+            body_preview = resp.text[:400]
+            logger.error(f"Stop-loss metrics fetch error {resp.status_code}: {body_preview}")
+            raise requests.exceptions.HTTPError(
+                f"Meta {resp.status_code}: {body_preview}",
+                response=resp,
+            )
 
         data = resp.json()
         for row in data.get("data", []):

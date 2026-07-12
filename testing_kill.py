@@ -72,36 +72,48 @@ def _fetch_lifetime_insights(config: Config) -> dict:
         page_count += 1
 
         resp = None
-        for attempt in range(4):
+        for attempt in range(5):
             try:
                 resp = requests.get(url, params=params if page_count == 1 else None, timeout=120)
 
-                # Retry on server errors + Meta's transient 400 ("Service temporarily unavailable")
-                is_transient_400 = False
+                # Broader retry detection: transient markers, rate limits, service messages
+                is_retryable_400 = False
                 if resp.status_code == 400:
                     try:
                         err = resp.json().get("error", {})
-                        is_transient_400 = err.get("code") in (1, 2) or err.get("is_transient") is True
+                        code = err.get("code")
+                        subcode = err.get("error_subcode")
+                        msg = (err.get("message", "") + " " + err.get("error_user_msg", "")).lower()
+                        is_retryable_400 = (
+                            err.get("is_transient") is True
+                            or code in (1, 2, 4, 17, 32)
+                            or subcode in (1504018, 1487742, 1504044)
+                            or any(k in msg for k in ("temporarily", "limit reached", "too many", "try again", "load", "unavailable"))
+                        )
                     except Exception:
                         pass
 
-                if (resp.status_code in (403, 500, 502, 503, 504) or is_transient_400) and attempt < 3:
-                    wait = [15, 30, 60][attempt]
-                    logger.warning(f"Lifetime fetch {resp.status_code}, retrying in {wait}s (body: {resp.text[:200]})")
+                if (resp.status_code in (403, 500, 502, 503, 504) or is_retryable_400) and attempt < 4:
+                    wait = [30, 60, 120, 240][attempt]
+                    logger.warning(f"Lifetime fetch {resp.status_code}, retrying in {wait}s (attempt {attempt + 1}/5, body: {resp.text[:200]})")
                     time.sleep(wait)
                     continue
                 break
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-                if attempt < 3:
-                    wait = [15, 30, 60][attempt]
+                if attempt < 4:
+                    wait = [30, 60, 120, 240][attempt]
                     logger.warning(f"Lifetime fetch network error, retrying in {wait}s: {e}")
                     time.sleep(wait)
                 else:
                     raise
 
         if not resp.ok:
-            logger.error(f"Lifetime insights fetch error {resp.status_code}: {resp.text[:500]}")
-            resp.raise_for_status()
+            body_preview = resp.text[:400]
+            logger.error(f"Lifetime insights fetch error {resp.status_code}: {body_preview}")
+            raise requests.exceptions.HTTPError(
+                f"Meta {resp.status_code}: {body_preview}",
+                response=resp,
+            )
 
         data = resp.json()
         for row in data.get("data", []):
