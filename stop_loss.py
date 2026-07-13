@@ -263,8 +263,9 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
     Returns (ad_actions, adset_actions).
     """
     import os
-    if os.environ.get("STOP_LOSS_DISABLED", "").lower() == "true":
-        logger.info("Stop-loss disabled via STOP_LOSS_DISABLED env var — skipping")
+    # Off by default — set STOP_LOSS_ENABLED=true in Railway to run
+    if os.environ.get("STOP_LOSS_ENABLED", "").lower() != "true":
+        logger.info("Stop-loss disabled by default. Set STOP_LOSS_ENABLED=true to run.")
         return [], []
 
     mode = "DRY RUN" if dry_run else "LIVE"
