@@ -262,6 +262,11 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
     Run intra-day stop-loss and restart checks at both ad and adset level.
     Returns (ad_actions, adset_actions).
     """
+    import os
+    if os.environ.get("STOP_LOSS_DISABLED", "").lower() == "true":
+        logger.info("Stop-loss disabled via STOP_LOSS_DISABLED env var — skipping")
+        return [], []
+
     mode = "DRY RUN" if dry_run else "LIVE"
     logger.info(f"=== Stop-loss check [{mode}] ===")
 
