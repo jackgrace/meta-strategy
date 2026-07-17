@@ -385,11 +385,14 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART: PAUSED + no OFF + spend > $1 + (ROAS > 1.6 OR CPA/ATC < $8)
+        # RESTART: only if ad itself is PAUSED (not blocked by parent being off).
+        # Statuses like ADSET_PAUSED / CAMPAIGN_PAUSED mean the ad isn't the
+        # one that was turned off — reactivating it is a no-op and creates
+        # false Slack notifications.
         has_off = "OFF" in current_name.upper()
         good_roas = ad["roas"] > RESTART_ROAS_THRESHOLD
         good_cpa = ad["cost_per_atc"] > 0 and ad["cost_per_atc"] < RESTART_CPA_ATC_THRESHOLD
-        if (status != "ACTIVE" and not has_off
+        if (status == "PAUSED" and not has_off
             and ad["spend"] > RESTART_SPEND_THRESHOLD
             and (good_roas or good_cpa)):
 
@@ -483,7 +486,9 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ADSET_RESTART_LOW_SPEND_MIN < spend <= ADSET_RESTART_LOW_SPEND_MAX
             and purchases > 0
         )
-        if status != "ACTIVE" and (primary_restart or low_spend_restart):
+        # Only restart if the adset itself is PAUSED (not blocked by parent
+        # campaign being off — that shows up as CAMPAIGN_PAUSED).
+        if status == "PAUSED" and (primary_restart or low_spend_restart):
 
             if dry_run:
                 action, reason = "would_activate", "dry run"
