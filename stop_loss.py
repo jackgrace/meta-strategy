@@ -39,6 +39,7 @@ STOP_CPA_ATC_THRESHOLD = 10.0  # cost per ATC must exceed this
 
 RESTART_SPEND_THRESHOLD = 1.0
 RESTART_ROAS_THRESHOLD = 1.6
+RESTART_CPA_ATC_THRESHOLD = 8.0  # if CPA/ATC is below this, restart even without ROAS
 
 # Adset-level thresholds
 ADSET_STOP_SPEND_THRESHOLD = 500.0
@@ -380,11 +381,13 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART: currently PAUSED, name does NOT contain OFF + passes thresholds
+        # RESTART: PAUSED + no OFF + spend > $1 + (ROAS > 1.6 OR CPA/ATC < $8)
         has_off = "OFF" in current_name.upper()
+        good_roas = ad["roas"] > RESTART_ROAS_THRESHOLD
+        good_cpa = ad["cost_per_atc"] > 0 and ad["cost_per_atc"] < RESTART_CPA_ATC_THRESHOLD
         if (status != "ACTIVE" and not has_off
             and ad["spend"] > RESTART_SPEND_THRESHOLD
-            and ad["roas"] > RESTART_ROAS_THRESHOLD):
+            and (good_roas or good_cpa)):
 
             if dry_run:
                 action, reason = "would_activate", "dry run"
@@ -393,7 +396,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 if success:
                     action = "activated"
                     restart_count += 1
-                    logger.info(f"RESTART: Activated {ad_id} ({ad['ad_name']}) — spend ${ad['spend']:.2f}, ROAS {ad['roas']:.2f}")
+                    logger.info(f"RESTART: Activated {ad_id} ({ad['ad_name']}) — spend ${ad['spend']:.2f}, ROAS {ad['roas']:.2f}, CPA/ATC ${ad['cost_per_atc']:.2f}")
                 else:
                     action = "failed"
                     fail_count += 1
@@ -547,7 +550,7 @@ def build_stop_loss_slack_message(
             f"*[{mode}]* " + " │ ".join(summary_parts) + "\n"
             f"_Rules: CC, VALUE, or SCALE campaigns │ Today's metrics_\n"
             f"_Ad stop: spend>${STOP_SPEND_THRESHOLD:.0f} & ROAS<{STOP_ROAS_THRESHOLD} & CPA/ATC>${STOP_CPA_ATC_THRESHOLD:.0f} & campaign ROAS<{STOP_CAMPAIGN_ROAS_THRESHOLD}_\n"
-            f"_Ad restart: spend>${RESTART_SPEND_THRESHOLD:.0f} & ROAS>{RESTART_ROAS_THRESHOLD} & no 'OFF' in name_\n"
+            f"_Ad restart: no 'OFF' in name & spend>${RESTART_SPEND_THRESHOLD:.0f} & (ROAS>{RESTART_ROAS_THRESHOLD} OR CPA/ATC<${RESTART_CPA_ATC_THRESHOLD:.0f})_\n"
             f"_Adset stop: spend>${ADSET_STOP_SPEND_THRESHOLD:.0f} & ROAS<{ADSET_STOP_ROAS_THRESHOLD}_\n"
             f"_Adset restart: spend>${ADSET_RESTART_SPEND_THRESHOLD:.0f} & ROAS>{ADSET_RESTART_ROAS_THRESHOLD}_"
         )}
