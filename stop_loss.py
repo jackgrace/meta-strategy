@@ -34,7 +34,7 @@ AEST = timezone(timedelta(hours=10))
 
 STOP_SPEND_THRESHOLD = 100.0
 STOP_ROAS_THRESHOLD = 1.6
-STOP_ADSET_ROAS_THRESHOLD = 1.6
+STOP_CAMPAIGN_ROAS_THRESHOLD = 1.6
 STOP_CPA_ATC_THRESHOLD = 10.0  # cost per ATC must exceed this
 
 RESTART_SPEND_THRESHOLD = 1.0
@@ -82,7 +82,7 @@ def _fetch_today_metrics(config: Config) -> dict:
     params = {
         "access_token": config.meta_access_token,
         "level": "ad",
-        "fields": "ad_id,ad_name,campaign_name,adset_id,adset_name,spend,actions,action_values,cost_per_action_type",
+        "fields": "ad_id,ad_name,campaign_id,campaign_name,adset_id,adset_name,spend,actions,action_values,cost_per_action_type",
         "date_preset": "today",
         "limit": 200,
     }
@@ -175,6 +175,7 @@ def _fetch_today_metrics(config: Config) -> dict:
 
             ads[row["ad_id"]] = {
                 "ad_name": row.get("ad_name", "Unknown"),
+                "campaign_id": row.get("campaign_id", ""),
                 "campaign_name": row.get("campaign_name", "Unknown"),
                 "adset_id": row.get("adset_id", ""),
                 "adset_name": row.get("adset_name", "Unknown"),
@@ -209,6 +210,24 @@ def _compute_adset_roas(ads: dict) -> dict:
             "roas": v["revenue"] / v["spend"] if v["spend"] > 0 else 0,
         }
         for adset_id, v in adsets.items()
+    }
+
+
+def _compute_campaign_roas(ads: dict) -> dict:
+    """Aggregate ROAS by campaign_id from ad-level data."""
+    campaigns = defaultdict(lambda: {"spend": 0, "revenue": 0})
+    for ad in ads.values():
+        if ad.get("campaign_id"):
+            campaigns[ad["campaign_id"]]["spend"] += ad["spend"]
+            campaigns[ad["campaign_id"]]["revenue"] += ad["revenue"]
+
+    return {
+        cid: {
+            "spend": v["spend"],
+            "revenue": v["revenue"],
+            "roas": v["revenue"] / v["spend"] if v["spend"] > 0 else 0,
+        }
+        for cid, v in campaigns.items()
     }
 
 
@@ -277,8 +296,9 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         logger.info("No ad data for today")
         return [], []
 
-    # Compute adset ROAS
+    # Compute adset + campaign aggregate ROAS
     adset_roas = _compute_adset_roas(today_ads)
+    campaign_roas = _compute_campaign_roas(today_ads)
 
     # Fetch statuses for ads we have data for
     ad_ids = set(today_ads.keys())
@@ -314,13 +334,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
     adset_restart = 0
     adset_fail = 0
 
-    # Ad-level stop-loss disabled by default. Set STOP_LOSS_ADS=true to enable.
-    import os
-    ad_level_enabled = os.environ.get("STOP_LOSS_ADS", "").lower() == "true"
-
     for ad_id, ad in today_ads.items():
-        if not ad_level_enabled:
-            break
         # Only target campaigns (CC, VALUE, or SCALE)
         if not _is_target_campaign(ad["campaign_name"]):
             continue
@@ -333,12 +347,15 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         adset_spend = adset_data.get("spend", 0)
         adset_r = adset_data.get("roas", 0)
 
+        campaign_data = campaign_roas.get(ad["campaign_id"], {})
+        campaign_r = campaign_data.get("roas", 0)
+
         # STOP-LOSS: ACTIVE + all thresholds breached
         if (status == "ACTIVE"
             and ad["spend"] > STOP_SPEND_THRESHOLD
             and ad["roas"] < STOP_ROAS_THRESHOLD
             and ad["cost_per_atc"] > STOP_CPA_ATC_THRESHOLD
-            and adset_r < STOP_ADSET_ROAS_THRESHOLD):
+            and campaign_r < STOP_CAMPAIGN_ROAS_THRESHOLD):
 
             if dry_run:
                 action, reason = "would_pause", "dry run"
@@ -347,7 +364,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 if success:
                     action = "paused"
                     stop_count += 1
-                    logger.info(f"STOP-LOSS: Paused {ad_id} ({ad['ad_name']}) — spend ${ad['spend']:.2f}, ROAS {ad['roas']:.2f}, CPA/ATC ${ad['cost_per_atc']:.2f}, adset ROAS {adset_r:.2f}")
+                    logger.info(f"STOP-LOSS: Paused {ad_id} ({ad['ad_name']}) — spend ${ad['spend']:.2f}, ROAS {ad['roas']:.2f}, CPA/ATC ${ad['cost_per_atc']:.2f}, campaign ROAS {campaign_r:.2f}")
                 else:
                     action = "failed"
                     fail_count += 1
@@ -482,7 +499,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 purchases=purchases,
             ))
 
-    ad_label = f"AD: {stop_count} paused, {restart_count} activated, {fail_count} failed" if ad_level_enabled else "AD: disabled"
+    ad_label = f"AD: {stop_count} paused, {restart_count} activated, {fail_count} failed"
     logger.info(
         f"Stop-loss complete: {ad_label} │ "
         f"ADSET: {adset_stop} paused, {adset_restart} activated, {adset_fail} failed"
@@ -535,7 +552,7 @@ def build_stop_loss_slack_message(
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* " + " │ ".join(summary_parts) + "\n"
             f"_Rules: CC, VALUE, or SCALE campaigns │ Today's metrics_\n"
-            f"_Ad stop: spend>${STOP_SPEND_THRESHOLD:.0f} & ROAS<{STOP_ROAS_THRESHOLD} & CPA/ATC>${STOP_CPA_ATC_THRESHOLD:.0f} & adset ROAS<{STOP_ADSET_ROAS_THRESHOLD}_\n"
+            f"_Ad stop: spend>${STOP_SPEND_THRESHOLD:.0f} & ROAS<{STOP_ROAS_THRESHOLD} & CPA/ATC>${STOP_CPA_ATC_THRESHOLD:.0f} & campaign ROAS<{STOP_CAMPAIGN_ROAS_THRESHOLD}_\n"
             f"_Ad restart: spend>${RESTART_SPEND_THRESHOLD:.0f} & ROAS>{RESTART_ROAS_THRESHOLD} & no 'OFF' in name_\n"
             f"_Adset stop: spend>${ADSET_STOP_SPEND_THRESHOLD:.0f} & ROAS<{ADSET_STOP_ROAS_THRESHOLD}_\n"
             f"_Adset restart: spend>${ADSET_RESTART_SPEND_THRESHOLD:.0f} & ROAS>{ADSET_RESTART_ROAS_THRESHOLD}_"
