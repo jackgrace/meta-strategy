@@ -281,12 +281,6 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
     Run intra-day stop-loss and restart checks at both ad and adset level.
     Returns (ad_actions, adset_actions).
     """
-    import os
-    # Off by default — set STOP_LOSS_ENABLED=true in Railway to run
-    if os.environ.get("STOP_LOSS_ENABLED", "").lower() != "true":
-        logger.info("Stop-loss disabled by default. Set STOP_LOSS_ENABLED=true to run.")
-        return [], []
-
     mode = "DRY RUN" if dry_run else "LIVE"
     logger.info(f"=== Stop-loss check [{mode}] ===")
 
