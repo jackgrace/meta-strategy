@@ -92,9 +92,14 @@ def _fetch_today_metrics(config: Config) -> dict:
     params = {
         "access_token": config.meta_access_token,
         "level": "ad",
-        "fields": "ad_id,ad_name,campaign_id,campaign_name,adset_id,adset_name,spend,actions,action_values,cost_per_action_type",
+        # Drop cost_per_action_type — we compute cost_per_atc from spend/atcs anyway.
+        # Fewer fields = lighter query, less likely to hit Meta's 1504044 error.
+        "fields": "ad_id,ad_name,campaign_id,campaign_name,adset_id,adset_name,spend,actions,action_values",
         "date_preset": "today",
         "limit": 200,
+        # Only pull ads that actually had impressions today. Massively reduces
+        # payload size on large accounts with many zero-spend ads.
+        "filtering": '[{"field":"impressions","operator":"GREATER_THAN","value":"0"}]',
     }
 
     ads = {}
@@ -166,7 +171,6 @@ def _fetch_today_metrics(config: Config) -> dict:
             revenue = 0.0
             purchases = 0
             atcs = 0
-            cost_per_atc_reported = 0.0
             for av in row.get("action_values", []) or []:
                 if av.get("action_type") == "purchase":
                     revenue = float(av.get("value", 0))
@@ -175,13 +179,8 @@ def _fetch_today_metrics(config: Config) -> dict:
                     purchases = int(float(a.get("value", 0)))
                 elif a.get("action_type") == "add_to_cart":
                     atcs = int(float(a.get("value", 0)))
-            for cpa in row.get("cost_per_action_type", []) or []:
-                if cpa.get("action_type") == "add_to_cart":
-                    cost_per_atc_reported = float(cpa.get("value", 0))
 
-            cost_per_atc = cost_per_atc_reported if cost_per_atc_reported > 0 else (
-                spend / atcs if atcs > 0 else 0
-            )
+            cost_per_atc = spend / atcs if atcs > 0 else 0
 
             ads[row["ad_id"]] = {
                 "ad_name": row.get("ad_name", "Unknown"),
