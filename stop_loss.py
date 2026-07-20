@@ -42,12 +42,12 @@ RESTART_ROAS_THRESHOLD = 1.6
 RESTART_CPA_ATC_THRESHOLD = 8.0  # if CPA/ATC is below this, restart even without ROAS
 
 # Adset-level thresholds
-ADSET_STOP_SPEND_THRESHOLD = 1500.0       # spend gate for ROAS check
-ADSET_STOP_ROAS_THRESHOLD = 1.2
+ADSET_STOP_SPEND_THRESHOLD = 1000.0       # spend gate for ROAS check
+ADSET_STOP_ROAS_THRESHOLD = 1.4
 ADSET_STOP_NO_PURCHASE_SPEND = 250.0      # alt: pause if spend>this AND 0 purchases
 
-ADSET_RESTART_SPEND_THRESHOLD = 500.0     # spend gate for ROAS check
-ADSET_RESTART_ROAS_THRESHOLD = 1.2
+ADSET_RESTART_SPEND_THRESHOLD = 1000.0    # spend gate for ROAS check
+ADSET_RESTART_ROAS_THRESHOLD = 1.4
 ADSET_RESTART_LOW_SPEND_MIN = 250.0       # alt band: spend $250-500 with purchases
 ADSET_RESTART_LOW_SPEND_MAX = 500.0
 
