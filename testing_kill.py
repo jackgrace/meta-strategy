@@ -10,7 +10,7 @@ PAUSE ad IF:
 - Ad is currently ACTIVE
 - AND either branch matches:
     A) DEAD:       30d spend > $30  AND  (0 ATCs OR 0 purchases)
-    B) EFFICIENCY: 30d spend > $50  AND  CPA/ATC > $10  AND  ROAS < 1.5
+    B) EFFICIENCY: 30d spend > $30  AND  CPA/ATC < $10  AND  (0 purchases OR ROAS < 1.6)
 """
 
 import logging
@@ -28,9 +28,9 @@ logger = logging.getLogger(__name__)
 AEST = timezone(timedelta(hours=10))
 
 DEAD_SPEND_THRESHOLD = 30.0        # spend > $30 & (0 ATCs OR 0 purchases)
-EFFICIENCY_SPEND_THRESHOLD = 50.0  # spend > $50 & CPA/ATC > $10 & ROAS < 1.5
-MAX_COST_PER_ATC = 10.0
-MIN_ROAS_FOR_KILL = 1.5
+EFFICIENCY_SPEND_THRESHOLD = 30.0  # spend > $30 & CPA/ATC < $10 & (0 purchases OR ROAS < 1.6)
+CHEAP_ATC_THRESHOLD = 10.0         # "cheap ATCs" cutoff
+MIN_ROAS_FOR_KILL = 1.6
 
 
 @dataclass
@@ -228,12 +228,14 @@ def run_testing_kill(config: Config, dry_run: bool = False) -> list[TestingKillA
 
         # Rule branches (each has its own spend gate):
         # A) DEAD:       spend > $30 & (0 ATCs OR 0 purchases)
-        # B) EFFICIENCY: spend > $50 & CPA/ATC > $10 & ROAS < 1.5
+        # B) EFFICIENCY: spend > $30 & CPA/ATC < $10 & (0 purchases OR ROAS < 1.6)
+        #    "cheap ATCs that don't convert" — engagement but no sales
         dead = ad["spend"] > DEAD_SPEND_THRESHOLD and (ad["atcs"] == 0 or ad["purchases"] == 0)
         efficiency = (
             ad["spend"] > EFFICIENCY_SPEND_THRESHOLD
-            and ad["cost_per_atc"] > MAX_COST_PER_ATC
-            and ad["roas"] < MIN_ROAS_FOR_KILL
+            and ad["cost_per_atc"] > 0
+            and ad["cost_per_atc"] < CHEAP_ATC_THRESHOLD
+            and (ad["purchases"] == 0 or ad["roas"] < MIN_ROAS_FOR_KILL)
         )
 
         if dead:
@@ -244,7 +246,8 @@ def run_testing_kill(config: Config, dry_run: bool = False) -> list[TestingKillA
                 missing.append("0 purchases")
             reason = f"spend ${ad['spend']:.2f} & " + " & ".join(missing)
         elif efficiency:
-            reason = f"spend ${ad['spend']:.2f} & CPA/ATC ${ad['cost_per_atc']:.2f} > ${MAX_COST_PER_ATC:.0f} & ROAS {ad['roas']:.2f} < {MIN_ROAS_FOR_KILL}"
+            failing = "0 purchases" if ad["purchases"] == 0 else f"ROAS {ad['roas']:.2f} < {MIN_ROAS_FOR_KILL}"
+            reason = f"spend ${ad['spend']:.2f} & CPA/ATC ${ad['cost_per_atc']:.2f} < ${CHEAP_ATC_THRESHOLD:.0f} & {failing}"
         else:
             continue  # doesn't meet either kill condition
 
@@ -316,7 +319,7 @@ def build_testing_kill_message(actions: list[TestingKillAction], dry_run: bool) 
             f"*[{mode}]* " + " │ ".join(summary_parts) + "\n"
             f"_Rule: TESTING campaign │ adset not OFF │ ad not RUN │ 30d metrics_\n"
             f"_(spend>${DEAD_SPEND_THRESHOLD:.0f} & (0 ATCs OR 0 purchases)) OR "
-            f"(spend>${EFFICIENCY_SPEND_THRESHOLD:.0f} & CPA/ATC>${MAX_COST_PER_ATC:.0f} & ROAS<{MIN_ROAS_FOR_KILL})_\n"
+            f"(spend>${EFFICIENCY_SPEND_THRESHOLD:.0f} & CPA/ATC<${CHEAP_ATC_THRESHOLD:.0f} & (0 purchases OR ROAS<{MIN_ROAS_FOR_KILL}))_\n"
             f"Total 30d spend on flagged ads: *${total_spend:.2f}*"
         )}
     })
