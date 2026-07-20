@@ -517,12 +517,18 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART: PAUSED and spend > $30 and metrics recovered
+        # RESTART: PAUSED, spend > $50, and one of:
+        #   - ROAS >= 1.6 (recovered on hard KPI), OR
+        #   - has purchases AND CPA/ATC <= $10 (converting cheaply)
+        # We no longer restart on "has ATCs" alone — that flip-flopped with
+        # the new "0 purchases → pause" stop-loss branch.
         recovered = (
             roas >= TESTING_ADSET_ROAS_THRESHOLD
-            or (cost_per_atc > 0 and cost_per_atc <= TESTING_ADSET_CPA_ATC_THRESHOLD)
-            or purchases > 0
-            or atcs > 0
+            or (
+                purchases > 0
+                and cost_per_atc > 0
+                and cost_per_atc <= TESTING_ADSET_CPA_ATC_THRESHOLD
+            )
         )
         if (status == "PAUSED"
             and spend > TESTING_ADSET_SPEND_THRESHOLD
@@ -609,7 +615,7 @@ def build_stop_loss_slack_message(
             f"_Adset stop: (spend>${ADSET_STOP_SPEND_THRESHOLD:.0f} & ROAS<{ADSET_STOP_ROAS_THRESHOLD}) OR (spend>${ADSET_STOP_NO_PURCHASE_SPEND:.0f} & 0 purchases)_\n"
             f"_Adset restart: (spend>${ADSET_RESTART_SPEND_THRESHOLD:.0f} & ROAS>{ADSET_RESTART_ROAS_THRESHOLD}) OR (spend ${ADSET_RESTART_LOW_SPEND_MIN:.0f}-${ADSET_RESTART_LOW_SPEND_MAX:.0f} & has purchases)_\n"
             f"_TESTING adset stop: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ((ROAS<{TESTING_ADSET_ROAS_THRESHOLD} & CPA/ATC>${TESTING_ADSET_CPA_ATC_THRESHOLD:.0f}) OR 0 purchases)_\n"
-            f"_TESTING adset restart: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & any of: ROAS>={TESTING_ADSET_ROAS_THRESHOLD} / CPA/ATC<=${TESTING_ADSET_CPA_ATC_THRESHOLD:.0f} / has purchases / has ATCs_"
+            f"_TESTING adset restart: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & (ROAS>={TESTING_ADSET_ROAS_THRESHOLD} OR (has purchases & CPA/ATC<=${TESTING_ADSET_CPA_ATC_THRESHOLD:.0f}))_"
         )}
     })
 
