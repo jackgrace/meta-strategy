@@ -107,14 +107,24 @@ def find_pause_candidates(
     # Check all ads we have status for
     all_ad_ids = set(ad_spend.keys()) | set(ad_statuses.keys())
 
+    skipped_parent_off = 0
+
     for ad_id in all_ad_ids:
         info = ad_statuses.get(ad_id, {})
         status = info.get("status", "UNKNOWN")
+        campaign_status = info.get("campaign_status", "UNKNOWN")
+        adset_status = info.get("adset_status", "UNKNOWN")
         created_time = info.get("created_time", "")
 
         # Skip already paused/off ads
         if status not in ("ACTIVE", "IN_PROCESS", "WITH_ISSUES", "PENDING_REVIEW"):
             skipped_paused += 1
+            continue
+
+        # Skip if parent campaign or adset isn't ACTIVE — Meta will reject
+        # the pause call anyway, and the ad isn't delivering.
+        if campaign_status != "ACTIVE" or adset_status != "ACTIVE":
+            skipped_parent_off += 1
             continue
 
         spend_data = ad_spend.get(ad_id, {})
@@ -168,8 +178,9 @@ def find_pause_candidates(
 
     logger.info(
         f"Auto-pause: {len(all_ad_ids)} ads checked │ "
-        f"{skipped_paused} already paused │ {skipped_campaign} not CC/VALUE │ "
-        f"{skipped_off} already OFF │ {skipped_young} too young (<{MIN_AD_AGE_DAYS}d) │ "
+        f"{skipped_paused} already paused │ {skipped_parent_off} parent off │ "
+        f"{skipped_campaign} not CC/VALUE │ {skipped_off} already OFF │ "
+        f"{skipped_young} too young (<{MIN_AD_AGE_DAYS}d) │ "
         f"{len(candidates)} candidates (<${SPEND_THRESHOLD} in {LOOKBACK_DAYS}d)"
     )
 
