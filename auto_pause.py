@@ -262,7 +262,8 @@ def build_pause_slack_message(candidates: list[PauseCandidate], dry_run: bool) -
     displayed = candidates[:MAX_DISPLAY]
 
     # Split into paused vs needs manual action
-    paused = [c for c in candidates if c.action_taken == "paused"]
+    # "paused (rename failed)" counts as paused since the status change succeeded
+    paused = [c for c in candidates if c.action_taken in ("paused", "paused (rename failed)")]
     manual = [c for c in candidates if c.action_taken.startswith("skipped:")]
     would_pause = [c for c in candidates if c.action_taken == "would_pause"]
 
@@ -282,10 +283,13 @@ def build_pause_slack_message(candidates: list[PauseCandidate], dry_run: bool) -
             "text": {"type": "mrkdwn", "text": "⚠️ *Manual pause needed:*"}
         })
         for c in manual[:MAX_DISPLAY]:
+            # Strip "skipped: " prefix to just show Meta's error reason
+            reason = c.action_taken.replace("skipped: ", "", 1) if c.action_taken.startswith("skipped:") else c.action_taken
             lines = [
                 f"• *{c.ad_name}*",
                 f"  Campaign: `{c.campaign_name}` │ Adset: `{c.adset_name}`",
                 f"  14d spend: ${c.total_spend_14d:.2f} │ Created: {c.created_date} ({c.ad_age_days}d old)",
+                f"  _Reason: {reason}_",
             ]
             blocks.append({
                 "type": "section",
