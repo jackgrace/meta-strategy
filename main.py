@@ -27,9 +27,11 @@ logger = logging.getLogger(__name__)
 
 def run_check() -> dict:
     """
-    Daily run: auto-pause (CC campaigns, >14d old, <$30 spend in 14d).
+    Daily run: auto-pause (14d spend<\$30) is DISABLED.
+    /pause and /slack/pause endpoints still call run_auto_pause() directly.
     """
-    return run_auto_pause()
+    logger.info("Auto-pause disabled — daily run is a no-op.")
+    return {"status": "ok", "message": "auto-pause disabled"}
 
 
 def run_fatigue_only() -> dict:
