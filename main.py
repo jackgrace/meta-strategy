@@ -14,6 +14,7 @@ from early_fatigue import analyze_early_fatigue
 from auto_pause import find_pause_candidates, execute_pause, send_pause_report
 from stop_loss import run_stop_loss as _run_stop_loss, send_stop_loss_report
 from testing_kill import run_testing_kill as _run_testing_kill, send_testing_kill_report
+from midnight_restart import run_midnight_restart as _run_midnight_restart, send_midnight_report
 from slack_reporter import send_testing_missed_opps, send_early_fatigue_report
 
 logging.basicConfig(
@@ -143,6 +144,22 @@ def run_testing_kill() -> dict:
         "mode": "DRY RUN" if dry_run else "LIVE",
         "paused": sum(1 for a in actions if a.action == "paused"),
         "would_pause": sum(1 for a in actions if a.action == "would_pause"),
+        "failed": sum(1 for a in actions if a.action == "failed"),
+    }
+
+
+def run_midnight_restart() -> dict:
+    """Midnight adset restart. Live unless AUTO_PAUSE_ENABLED != 'true'."""
+    import os
+    dry_run = os.environ.get("AUTO_PAUSE_ENABLED", "").lower() != "true"
+    config = Config.from_env()
+    actions = _run_midnight_restart(config, dry_run=dry_run)
+    send_midnight_report(actions, dry_run, config)
+    return {
+        "status": "ok",
+        "mode": "DRY RUN" if dry_run else "LIVE",
+        "activated": sum(1 for a in actions if a.action == "activated"),
+        "would_activate": sum(1 for a in actions if a.action == "would_activate"),
         "failed": sum(1 for a in actions if a.action == "failed"),
     }
 

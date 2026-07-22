@@ -19,7 +19,7 @@ from urllib.parse import parse_qs
 
 import requests
 
-from main import run_check, run_fatigue_only, run_auto_pause, run_stop_loss, run_testing_kill
+from main import run_check, run_fatigue_only, run_auto_pause, run_stop_loss, run_testing_kill, run_midnight_restart
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._run_stop_loss_endpoint(source="http")
         elif self.path == "/testing-kill":
             self._run_testing_kill_endpoint(source="http")
+        elif self.path == "/midnight-restart":
+            self._run_midnight_restart_endpoint(source="http")
         else:
             self._respond(404, {"error": "not found"})
 
@@ -59,6 +61,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._handle_slack(run_stop_loss, "Running stop-loss check now...")
         elif self.path == "/slack/testing-kill":
             self._handle_slack(run_testing_kill, "Running testing kill check now...")
+        elif self.path == "/slack/midnight-restart":
+            self._handle_slack(run_midnight_restart, "Running midnight restart now...")
         elif self.path == "/run":
             self._run_check(source="http")
         elif self.path == "/fatigue":
@@ -124,6 +128,15 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(200, result)
         except Exception as e:
             logger.error(f"Testing kill check failed: {e}")
+            self._respond(500, {"status": "error", "message": str(e)})
+
+    def _run_midnight_restart_endpoint(self, source: str):
+        logger.info(f"Manual trigger via {source} — midnight restart")
+        try:
+            result = run_midnight_restart()
+            self._respond(200, result)
+        except Exception as e:
+            logger.error(f"Midnight restart failed: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
 
     def _manual_activate(self):
@@ -318,6 +331,26 @@ def _run_testing_kill_scheduler():
         time.sleep(60 * 60)
 
 
+def _run_midnight_restart_scheduler():
+    """Background thread: runs the midnight adset restart at 12:05am AEST."""
+    while True:
+        now = datetime.now(AEST)
+        # Next 12:05am AEST
+        next_run = now.replace(hour=0, minute=5, second=0, microsecond=0)
+        if next_run <= now:
+            next_run += timedelta(days=1)
+        wait_seconds = (next_run - now).total_seconds()
+        logger.info(f"Midnight-restart scheduler: next run at {next_run.isoformat()} ({wait_seconds:.0f}s from now)")
+        time.sleep(wait_seconds)
+
+        try:
+            logger.info("Scheduler: running 12:05am AEST midnight restart")
+            run_midnight_restart()
+        except Exception as e:
+            logger.error(f"Midnight restart failed: {e}")
+            _send_stop_loss_failure(f"midnight-restart: {type(e).__name__}: {e}")
+
+
 def start_server():
     port = int(os.environ.get("PORT", 8080))
 
@@ -336,6 +369,11 @@ def start_server():
     testing_kill_thread.start()
     logger.info("Testing-kill scheduler started (every 1 hour)")
 
+    # Start 12:05am midnight adset restart scheduler
+    midnight_thread = threading.Thread(target=_run_midnight_restart_scheduler, daemon=True)
+    midnight_thread.start()
+    logger.info("Midnight-restart scheduler started (12:05am AEST daily)")
+
     server = HTTPServer(("0.0.0.0", port), TriggerHandler)
     logger.info(f"Server listening on port {port}")
     logger.info(f"  GET  /run            — run all checks")
@@ -343,12 +381,14 @@ def start_server():
     logger.info(f"  GET  /pause          — auto-pause dry run")
     logger.info(f"  GET  /stoploss       — intra-day stop-loss")
     logger.info(f"  GET  /testing-kill   — testing campaign kill")
+    logger.info(f"  GET  /midnight-restart — reactivate qualifying adsets")
     logger.info(f"  GET  /activate?id=X  — manually reactivate an ad/adset")
     logger.info(f"  POST /slack/trigger  — Slack: all checks")
     logger.info(f"  POST /slack/fatigue  — Slack: fatigue only")
     logger.info(f"  POST /slack/pause    — Slack: auto-pause")
     logger.info(f"  POST /slack/stoploss — Slack: stop-loss")
     logger.info(f"  POST /slack/testing-kill — Slack: testing kill")
+    logger.info(f"  POST /slack/midnight-restart — Slack: midnight restart")
     logger.info(f"  GET  /health         — health check")
     server.serve_forever()
 
