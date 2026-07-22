@@ -471,35 +471,19 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         if "OFF" in current_name.upper():
             continue
 
-        # STOP-LOSS: ACTIVE and spend > $30 and (
-        #   (ROAS < 1.6 AND CPA/ATC > $10) OR
-        #   (0 purchases AND 0 ATCs) OR
-        #   (0 purchases)
-        # )
-        bad_efficiency = (
-            roas < TESTING_ADSET_ROAS_THRESHOLD
-            and cost_per_atc > TESTING_ADSET_CPA_ATC_THRESHOLD
-        )
-        dead = purchases == 0 and atcs == 0
-        no_purchase = purchases == 0
+        # STOP-LOSS: ACTIVE and spend > $30 and ROAS < 1.6
         if (status == "ACTIVE"
             and spend > TESTING_ADSET_SPEND_THRESHOLD
-            and (bad_efficiency or dead or no_purchase)):
+            and roas < TESTING_ADSET_ROAS_THRESHOLD):
 
             if dry_run:
                 action, reason = "would_pause", "dry run"
             else:
                 success, reason = _update_ad_status(config, adset_id, "PAUSED")
                 if success:
-                    if dead:
-                        branch = "dead"
-                    elif no_purchase and not bad_efficiency:
-                        branch = "no-purchase"
-                    else:
-                        branch = "efficiency"
                     action = "paused"
                     testing_stop += 1
-                    logger.info(f"TESTING ADSET STOP ({branch}): Paused {adset_id} ({current_name}) — spend ${spend:.2f}, ROAS {roas:.2f}, CPA/ATC ${cost_per_atc:.2f}, {purchases}p / {atcs} ATC")
+                    logger.info(f"TESTING ADSET STOP: Paused {adset_id} ({current_name}) — spend ${spend:.2f}, ROAS {roas:.2f}, {purchases} purchases")
                 else:
                     action = "failed"
                     testing_fail += 1
@@ -518,22 +502,10 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART: PAUSED, spend > $50, and one of:
-        #   - ROAS >= 1.6 (recovered on hard KPI), OR
-        #   - has purchases AND CPA/ATC <= $10 (converting cheaply)
-        # We no longer restart on "has ATCs" alone — that flip-flopped with
-        # the new "0 purchases → pause" stop-loss branch.
-        recovered = (
-            roas >= TESTING_ADSET_ROAS_THRESHOLD
-            or (
-                purchases > 0
-                and cost_per_atc > 0
-                and cost_per_atc <= TESTING_ADSET_CPA_ATC_THRESHOLD
-            )
-        )
+        # RESTART: PAUSED, spend > $30, ROAS >= 1.6
         if (status == "PAUSED"
             and spend > TESTING_ADSET_SPEND_THRESHOLD
-            and recovered):
+            and roas >= TESTING_ADSET_ROAS_THRESHOLD):
 
             if dry_run:
                 action, reason = "would_activate", "dry run"
@@ -616,8 +588,8 @@ def build_stop_loss_slack_message(
             f"_Rules: CC, VALUE, or SCALE campaigns │ Today's metrics_\n"
             f"_Adset stop: (spend>${ADSET_STOP_NO_PURCHASE_SPEND:.0f} & 0 purchases) OR (spend>${ADSET_STOP_SPEND_THRESHOLD:.0f} & ROAS<{ADSET_STOP_ROAS_THRESHOLD})_\n"
             f"_Adset restart: (spend>${ADSET_RESTART_SPEND_THRESHOLD:.0f} & ROAS>{ADSET_RESTART_ROAS_THRESHOLD}) OR (spend ${ADSET_RESTART_LOW_SPEND_MIN:.0f}-${ADSET_RESTART_LOW_SPEND_MAX:.0f} & has purchases)_\n"
-            f"_TESTING adset stop: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ((ROAS<{TESTING_ADSET_ROAS_THRESHOLD} & CPA/ATC>${TESTING_ADSET_CPA_ATC_THRESHOLD:.0f}) OR 0 purchases)_\n"
-            f"_TESTING adset restart: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & (ROAS>={TESTING_ADSET_ROAS_THRESHOLD} OR (has purchases & CPA/ATC<=${TESTING_ADSET_CPA_ATC_THRESHOLD:.0f}))_"
+            f"_TESTING adset stop: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{TESTING_ADSET_ROAS_THRESHOLD}_\n"
+            f"_TESTING adset restart: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS>={TESTING_ADSET_ROAS_THRESHOLD}_"
         )}
     })
 
