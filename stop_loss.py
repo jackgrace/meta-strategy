@@ -32,14 +32,11 @@ logger = logging.getLogger(__name__)
 
 AEST = timezone(timedelta(hours=10))
 
-STOP_SPEND_THRESHOLD = 100.0
+STOP_SPEND_THRESHOLD = 80.0
 STOP_ROAS_THRESHOLD = 1.6
-STOP_CAMPAIGN_ROAS_THRESHOLD = 1.6
-STOP_CPA_ATC_THRESHOLD = 10.0  # cost per ATC must exceed this
+STOP_CPA_ATC_THRESHOLD = 10.0  # cost per ATC below this — cheap engagement but not converting
 
-RESTART_SPEND_THRESHOLD = 1.0
 RESTART_ROAS_THRESHOLD = 1.6
-RESTART_CPA_ATC_THRESHOLD = 8.0  # if CPA/ATC is below this, restart even without ROAS
 
 # Adset-level thresholds
 ADSET_STOP_SPEND_THRESHOLD = 1500.0       # spend > this AND ROAS < ROAS threshold
@@ -351,10 +348,92 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
     adset_restart = 0
     adset_fail = 0
 
-    # === Ad-level stop-loss / restart for CC/VALUE/SCALE — DISABLED per request ===
+    # === Ad-level stop-loss / restart for CC/VALUE/SCALE (today's metrics) ===
     ad_stop = 0
     ad_restart = 0
     ad_fail = 0
+
+    for ad_id, ad in today_ads.items():
+        if not _is_target_campaign(ad["campaign_name"]):
+            continue
+
+        info = ad_info.get(ad_id, {})
+        status = info.get("status", "UNKNOWN")
+        current_name = info.get("name", ad["ad_name"])
+
+        # STOP-LOSS: ACTIVE + spend > $80 + ROAS < 1.6 + CPA/ATC < $10
+        # ("cheap engagement but not converting" pattern)
+        cheap_atc = ad["cost_per_atc"] > 0 and ad["cost_per_atc"] < STOP_CPA_ATC_THRESHOLD
+        if (status == "ACTIVE"
+            and ad["spend"] > STOP_SPEND_THRESHOLD
+            and ad["roas"] < STOP_ROAS_THRESHOLD
+            and cheap_atc):
+
+            if dry_run:
+                action, reason = "would_pause", "dry run"
+            else:
+                success, reason = _update_ad_status(config, ad_id, "PAUSED")
+                if success:
+                    action = "paused"
+                    ad_stop += 1
+                    logger.info(f"AD STOP-LOSS: Paused {ad_id} ({ad['ad_name']}) — spend ${ad['spend']:.2f}, ROAS {ad['roas']:.2f}, CPA/ATC ${ad['cost_per_atc']:.2f}")
+                else:
+                    action = "failed"
+                    ad_fail += 1
+                    logger.warning(f"AD STOP-LOSS: Failed to pause {ad_id}: {reason}")
+
+            actions.append(StopLossAction(
+                ad_id=ad_id,
+                ad_name=ad["ad_name"],
+                campaign_name=ad["campaign_name"],
+                adset_name=ad["adset_name"],
+                action=action,
+                reason=reason,
+                spend=ad["spend"],
+                roas=ad["roas"],
+                revenue=ad["revenue"],
+                purchases=ad["purchases"],
+                adset_spend=adset_roas.get(ad["adset_id"], {}).get("spend", 0),
+                adset_roas=adset_roas.get(ad["adset_id"], {}).get("roas", 0),
+            ))
+            continue
+
+        # RESTART: only if ad itself is PAUSED + name doesn't contain OFF
+        # (ad or adset) + today's ROAS recovered above threshold
+        has_off = (
+            "OFF" in current_name.upper()
+            or "OFF" in ad.get("adset_name", "").upper()
+        )
+        if (status == "PAUSED" and not has_off
+            and ad["roas"] > RESTART_ROAS_THRESHOLD):
+
+            if dry_run:
+                action, reason = "would_activate", "dry run"
+            else:
+                success, reason = _update_ad_status(config, ad_id, "ACTIVE")
+                if success:
+                    action = "activated"
+                    ad_restart += 1
+                    logger.info(f"AD RESTART: Activated {ad_id} ({ad['ad_name']}) — ROAS {ad['roas']:.2f}")
+                else:
+                    action = "failed"
+                    ad_fail += 1
+                    logger.warning(f"AD RESTART: Failed to activate {ad_id}: {reason}")
+
+            actions.append(StopLossAction(
+                ad_id=ad_id,
+                ad_name=ad["ad_name"],
+                campaign_name=ad["campaign_name"],
+                adset_name=ad["adset_name"],
+                action=action,
+                reason=reason,
+                spend=ad["spend"],
+                roas=ad["roas"],
+                revenue=ad["revenue"],
+                purchases=ad["purchases"],
+                adset_spend=adset_roas.get(ad["adset_id"], {}).get("spend", 0),
+                adset_roas=adset_roas.get(ad["adset_id"], {}).get("roas", 0),
+            ))
 
     # Aggregate today's purchases per adset for adset-level rules
     adset_purchases: dict[str, int] = defaultdict(int)
@@ -586,6 +665,8 @@ def build_stop_loss_slack_message(
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* " + " │ ".join(summary_parts) + "\n"
             f"_Rules: CC, VALUE, or SCALE campaigns │ Today's metrics_\n"
+            f"_Ad stop: spend>${STOP_SPEND_THRESHOLD:.0f} & ROAS<{STOP_ROAS_THRESHOLD} & CPA/ATC<${STOP_CPA_ATC_THRESHOLD:.0f}_\n"
+            f"_Ad restart: no 'OFF' in name & ROAS>{RESTART_ROAS_THRESHOLD}_\n"
             f"_Adset stop: (spend>${ADSET_STOP_NO_PURCHASE_SPEND:.0f} & 0 purchases) OR (spend>${ADSET_STOP_SPEND_THRESHOLD:.0f} & ROAS<{ADSET_STOP_ROAS_THRESHOLD})_\n"
             f"_Adset restart: (spend>${ADSET_RESTART_SPEND_THRESHOLD:.0f} & ROAS>{ADSET_RESTART_ROAS_THRESHOLD}) OR (spend ${ADSET_RESTART_LOW_SPEND_MIN:.0f}-${ADSET_RESTART_LOW_SPEND_MAX:.0f} & has purchases)_\n"
             f"_TESTING adset stop: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{TESTING_ADSET_ROAS_THRESHOLD}_\n"
