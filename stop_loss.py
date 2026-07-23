@@ -53,6 +53,10 @@ TESTING_ADSET_SPEND_THRESHOLD = 30.0
 TESTING_ADSET_ROAS_THRESHOLD = 1.6
 TESTING_ADSET_CPA_ATC_THRESHOLD = 10.0
 
+# CBO campaigns — adset-level rule (today's metrics)
+CBO_ADSET_SPEND_THRESHOLD = 100.0
+CBO_ADSET_ROAS_THRESHOLD = 1.4
+
 
 @dataclass
 class StopLossAction:
@@ -290,6 +294,12 @@ def _is_testing_campaign(campaign_name: str) -> bool:
     return "TESTING" in campaign_name.upper()
 
 
+def _is_cbo_campaign(campaign_name: str) -> bool:
+    """Match campaign name containing CBO as a whole word."""
+    parts = [p.strip() for p in campaign_name.upper().replace("|", " ").split()]
+    return "CBO" in parts
+
+
 def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossAction], list[AdsetAction]]:
     """
     Run intra-day stop-loss and restart checks at both ad and adset level.
@@ -316,28 +326,40 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         logger.error(f"Ad status fetch failed: {e}")
         return [], []
 
-    # Fetch statuses for CC/VALUE/SCALE adsets AND TESTING adsets
+    # Fetch statuses for CC/VALUE/SCALE, TESTING, and CBO adsets.
+    # CBO takes priority over CC/VALUE/SCALE — a "MIK | CBO | VALUE"
+    # campaign is evaluated by the CBO rule only.
     target_adset_ids: set[str] = set()
     testing_adset_ids: set[str] = set()
+    cbo_adset_ids: set[str] = set()
     adset_meta: dict[str, dict] = {}
     for ad in today_ads.values():
         if not ad["adset_id"]:
             continue
-        if _is_target_campaign(ad["campaign_name"]):
+        campaign_name = ad["campaign_name"]
+        if _is_cbo_campaign(campaign_name):
+            cbo_adset_ids.add(ad["adset_id"])
+            adset_meta[ad["adset_id"]] = {
+                "adset_name": ad["adset_name"],
+                "campaign_name": campaign_name,
+            }
+        elif _is_target_campaign(campaign_name):
             target_adset_ids.add(ad["adset_id"])
             adset_meta[ad["adset_id"]] = {
                 "adset_name": ad["adset_name"],
-                "campaign_name": ad["campaign_name"],
+                "campaign_name": campaign_name,
             }
-        elif _is_testing_campaign(ad["campaign_name"]):
+        elif _is_testing_campaign(campaign_name):
             testing_adset_ids.add(ad["adset_id"])
             adset_meta[ad["adset_id"]] = {
                 "adset_name": ad["adset_name"],
-                "campaign_name": ad["campaign_name"],
+                "campaign_name": campaign_name,
             }
 
     try:
-        adset_info = fetch_adset_statuses(config, target_adset_ids | testing_adset_ids)
+        adset_info = fetch_adset_statuses(
+            config, target_adset_ids | testing_adset_ids | cbo_adset_ids
+        )
     except Exception as e:
         logger.error(f"Adset status fetch failed: {e}")
         adset_info = {}
@@ -611,11 +633,92 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 purchases=purchases,
             ))
 
+    # === CBO adset-level stop-loss / restart (today's metrics) ===
+    cbo_stop = 0
+    cbo_restart = 0
+    cbo_fail = 0
+
+    for adset_id in cbo_adset_ids:
+        data = adset_roas.get(adset_id, {})
+        spend = data.get("spend", 0)
+        revenue = data.get("revenue", 0)
+        roas = data.get("roas", 0)
+        purchases = adset_purchases.get(adset_id, 0)
+
+        info = adset_info.get(adset_id, {})
+        status = info.get("status", "UNKNOWN")
+        current_name = info.get("name", adset_meta[adset_id]["adset_name"])
+
+        if "OFF" in current_name.upper():
+            continue
+
+        # STOP-LOSS: ACTIVE + spend > $100 + ROAS < 1.4
+        if (status == "ACTIVE"
+            and spend > CBO_ADSET_SPEND_THRESHOLD
+            and roas < CBO_ADSET_ROAS_THRESHOLD):
+
+            if dry_run:
+                action, reason = "would_pause", "dry run"
+            else:
+                success, reason = _update_ad_status(config, adset_id, "PAUSED")
+                if success:
+                    action = "paused"
+                    cbo_stop += 1
+                    logger.info(f"CBO ADSET STOP: Paused {adset_id} ({current_name}) — spend ${spend:.2f}, ROAS {roas:.2f}")
+                else:
+                    action = "failed"
+                    cbo_fail += 1
+                    logger.warning(f"CBO ADSET STOP: Failed to pause {adset_id}: {reason}")
+
+            adset_actions.append(AdsetAction(
+                adset_id=adset_id,
+                adset_name=current_name,
+                campaign_name=adset_meta[adset_id]["campaign_name"],
+                action=action,
+                reason=reason,
+                spend=spend,
+                revenue=revenue,
+                roas=roas,
+                purchases=purchases,
+            ))
+            continue
+
+        # RESTART: PAUSED + spend > $100 + ROAS > 1.4
+        if (status == "PAUSED"
+            and spend > CBO_ADSET_SPEND_THRESHOLD
+            and roas > CBO_ADSET_ROAS_THRESHOLD):
+
+            if dry_run:
+                action, reason = "would_activate", "dry run"
+            else:
+                success, reason = _update_ad_status(config, adset_id, "ACTIVE")
+                if success:
+                    action = "activated"
+                    cbo_restart += 1
+                    logger.info(f"CBO ADSET RESTART: Activated {adset_id} ({current_name}) — spend ${spend:.2f}, ROAS {roas:.2f}")
+                else:
+                    action = "failed"
+                    cbo_fail += 1
+                    logger.warning(f"CBO ADSET RESTART: Failed to activate {adset_id}: {reason}")
+
+            adset_actions.append(AdsetAction(
+                adset_id=adset_id,
+                adset_name=current_name,
+                campaign_name=adset_meta[adset_id]["campaign_name"],
+                action=action,
+                reason=reason,
+                spend=spend,
+                revenue=revenue,
+                roas=roas,
+                purchases=purchases,
+            ))
+
     logger.info(
         f"Stop-loss complete: "
         f"AD (CC/VALUE/SCALE): {ad_stop} paused, {ad_restart} activated, {ad_fail} failed │ "
         f"ADSET (CC/VALUE/SCALE): {adset_stop} paused, {adset_restart} activated, {adset_fail} failed │ "
-        f"ADSET (TESTING): {testing_stop} paused, {testing_restart} activated, {testing_fail} failed"
+        f"ADSET (TESTING): {testing_stop} paused, {testing_restart} activated, {testing_fail} failed │ "
+        f"ADSET (CBO): {cbo_stop} paused, {cbo_restart} activated, {cbo_fail} failed"
     )
     return actions, adset_actions
 
@@ -670,7 +773,9 @@ def build_stop_loss_slack_message(
             f"_Adset stop: (spend>${ADSET_STOP_NO_PURCHASE_SPEND:.0f} & 0 purchases) OR (spend>${ADSET_STOP_SPEND_THRESHOLD:.0f} & ROAS<{ADSET_STOP_ROAS_THRESHOLD})_\n"
             f"_Adset restart: (spend>${ADSET_RESTART_SPEND_THRESHOLD:.0f} & ROAS>{ADSET_RESTART_ROAS_THRESHOLD}) OR (spend ${ADSET_RESTART_LOW_SPEND_MIN:.0f}-${ADSET_RESTART_LOW_SPEND_MAX:.0f} & has purchases)_\n"
             f"_TESTING adset stop: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{TESTING_ADSET_ROAS_THRESHOLD}_\n"
-            f"_TESTING adset restart: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS>={TESTING_ADSET_ROAS_THRESHOLD}_"
+            f"_TESTING adset restart: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS>={TESTING_ADSET_ROAS_THRESHOLD}_\n"
+            f"_CBO adset stop: spend>${CBO_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{CBO_ADSET_ROAS_THRESHOLD}_\n"
+            f"_CBO adset restart: spend>${CBO_ADSET_SPEND_THRESHOLD:.0f} & ROAS>{CBO_ADSET_ROAS_THRESHOLD}_"
         )}
     })
 
