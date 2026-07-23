@@ -34,7 +34,7 @@ AEST = timezone(timedelta(hours=10))
 
 STOP_SPEND_THRESHOLD = 80.0
 STOP_ROAS_THRESHOLD = 1.6
-STOP_CPA_ATC_THRESHOLD = 10.0  # cost per ATC below this — cheap engagement but not converting
+STOP_CPA_ATC_THRESHOLD = 10.0  # cost per ATC above this — expensive ATCs = pause
 
 RESTART_ROAS_THRESHOLD = 1.6
 
@@ -361,13 +361,13 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         status = info.get("status", "UNKNOWN")
         current_name = info.get("name", ad["ad_name"])
 
-        # STOP-LOSS: ACTIVE + spend > $80 + ROAS < 1.6 + CPA/ATC < $10
-        # ("cheap engagement but not converting" pattern)
-        cheap_atc = ad["cost_per_atc"] > 0 and ad["cost_per_atc"] < STOP_CPA_ATC_THRESHOLD
+        # STOP-LOSS: ACTIVE + spend > $80 + ROAS < 1.6 + CPA/ATC > $10
+        # (expensive ATCs AND bad ROAS — cheap-ATC ads stay ON)
+        expensive_atc = ad["cost_per_atc"] > STOP_CPA_ATC_THRESHOLD
         if (status == "ACTIVE"
             and ad["spend"] > STOP_SPEND_THRESHOLD
             and ad["roas"] < STOP_ROAS_THRESHOLD
-            and cheap_atc):
+            and expensive_atc):
 
             if dry_run:
                 action, reason = "would_pause", "dry run"
@@ -665,7 +665,7 @@ def build_stop_loss_slack_message(
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* " + " │ ".join(summary_parts) + "\n"
             f"_Rules: CC, VALUE, or SCALE campaigns │ Today's metrics_\n"
-            f"_Ad stop: spend>${STOP_SPEND_THRESHOLD:.0f} & ROAS<{STOP_ROAS_THRESHOLD} & CPA/ATC<${STOP_CPA_ATC_THRESHOLD:.0f}_\n"
+            f"_Ad stop: spend>${STOP_SPEND_THRESHOLD:.0f} & ROAS<{STOP_ROAS_THRESHOLD} & CPA/ATC>${STOP_CPA_ATC_THRESHOLD:.0f}_\n"
             f"_Ad restart: no 'OFF' in name & ROAS>{RESTART_ROAS_THRESHOLD}_\n"
             f"_Adset stop: (spend>${ADSET_STOP_NO_PURCHASE_SPEND:.0f} & 0 purchases) OR (spend>${ADSET_STOP_SPEND_THRESHOLD:.0f} & ROAS<{ADSET_STOP_ROAS_THRESHOLD})_\n"
             f"_Adset restart: (spend>${ADSET_RESTART_SPEND_THRESHOLD:.0f} & ROAS>{ADSET_RESTART_ROAS_THRESHOLD}) OR (spend ${ADSET_RESTART_LOW_SPEND_MIN:.0f}-${ADSET_RESTART_LOW_SPEND_MAX:.0f} & has purchases)_\n"
