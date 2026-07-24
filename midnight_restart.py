@@ -1,19 +1,20 @@
 """
-Midnight adset restart rule.
+Midnight restart rules.
 
 Runs daily at 12:05am AEST.
 
-Turn ON adset IF:
+ADSET rule — turn ON adset IF:
 - Parent campaign is ACTIVE
 - Parent campaign had spend > $1 yesterday
 - Campaign name contains CC, SCALE, or VALUE
 - Adset name does NOT contain 'OFF'
 - Adset is currently PAUSED
 
-This "resets" adsets that got paused during the day (by stop-loss,
-manually, or otherwise) so that they get a fresh chance the next day.
-Adsets marked with OFF in the name are treated as intentionally off
-and are never reactivated by this rule.
+AD rule — turn ON ad IF:
+- Parent campaign is ACTIVE
+- Parent campaign had spend > $5 yesterday
+- Ad name does NOT contain 'OFF'
+- Ad is currently PAUSED
 """
 
 import logging
@@ -30,8 +31,9 @@ logger = logging.getLogger(__name__)
 
 AEST = timezone(timedelta(hours=10))
 
-MIN_YESTERDAY_CAMPAIGN_SPEND = 1.0
-TARGET_KEYWORDS = {"CC", "SCALE", "VALUE"}
+MIN_YESTERDAY_CAMPAIGN_SPEND = 1.0            # adset rule
+MIN_YESTERDAY_CAMPAIGN_SPEND_ADS = 5.0        # ad rule
+TARGET_KEYWORDS = {"CC", "SCALE", "VALUE"}    # adset rule only
 
 
 @dataclass
@@ -41,6 +43,17 @@ class MidnightAction:
     campaign_name: str
     campaign_yesterday_spend: float
     action: str  # "would_activate" | "activated" | "skipped" | "failed"
+    reason: str
+
+
+@dataclass
+class MidnightAdAction:
+    ad_id: str
+    ad_name: str
+    adset_name: str
+    campaign_name: str
+    campaign_yesterday_spend: float
+    action: str
     reason: str
 
 
@@ -188,6 +201,41 @@ def _fetch_paused_adsets(config: Config) -> list[dict]:
     return result
 
 
+def _fetch_paused_ads(config: Config) -> list[dict]:
+    """
+    Fetch all PAUSED ads in the account.
+    Returns list of {id, name, campaign_id, adset_name}.
+    """
+    url = f"{API_BASE}/{config.meta_ad_account_id}/ads"
+    params = {
+        "access_token": config.meta_access_token,
+        "fields": "id,name,campaign_id,adset{name},effective_status",
+        "limit": 500,
+        "filtering": '[{"field":"effective_status","operator":"IN","value":["PAUSED"]}]',
+    }
+
+    result = []
+    page_count = 0
+    while url:
+        page_count += 1
+        data = _http_get_json(config, url, params if page_count == 1 else None)
+        for row in data.get("data", []):
+            adset = row.get("adset") or {}
+            result.append({
+                "id": row.get("id"),
+                "name": row.get("name", "Unknown"),
+                "campaign_id": row.get("campaign_id"),
+                "adset_name": adset.get("name", "Unknown"),
+                "effective_status": row.get("effective_status", "UNKNOWN"),
+            })
+        paging = data.get("paging", {})
+        url = paging.get("next")
+        params = None
+
+    logger.info(f"Fetched {len(result)} PAUSED ads across {page_count} pages")
+    return result
+
+
 def _activate_adset(config: Config, adset_id: str) -> tuple[bool, str]:
     """POST status=ACTIVE. Returns (success, reason)."""
     url = f"{API_BASE}/{adset_id}"
@@ -217,7 +265,7 @@ def _activate_adset(config: Config, adset_id: str) -> tuple[bool, str]:
     return False, "no response"
 
 
-def run_midnight_restart(config: Config, dry_run: bool = False) -> list[MidnightAction]:
+def run_midnight_restart(config: Config, dry_run: bool = False) -> tuple[list[MidnightAction], list[MidnightAdAction]]:
     """Reactivate qualifying adsets that got paused during the day."""
     mode = "DRY RUN" if dry_run else "LIVE"
     logger.info(f"=== Midnight restart check [{mode}] ===")
@@ -307,11 +355,213 @@ def run_midnight_restart(config: Config, dry_run: bool = False) -> list[Midnight
             ))
 
     logger.info(
-        f"Midnight restart complete: {activated} activated │ "
+        f"Midnight ADSET restart complete: {activated} activated │ "
+        f"{failed} failed │ {skipped_off} skipped OFF │ "
+        f"{skipped_wrong_campaign} skipped (campaign not qualifying)"
+    )
+
+    # === AD-level midnight restart ===
+    ad_actions = _run_ad_level_midnight(config, campaign_spend, dry_run)
+    return actions, ad_actions
+
+
+def _activate_ad(config: Config, ad_id: str) -> tuple[bool, str]:
+    """POST status=ACTIVE on an ad. Returns (success, reason)."""
+    url = f"{API_BASE}/{ad_id}"
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                f"{url}?access_token={config.meta_access_token}",
+                data={"status": "ACTIVE"},
+                timeout=60,
+            )
+            if resp.status_code in (500, 502, 503, 504) and attempt < 2:
+                time.sleep([5, 15][attempt])
+                continue
+            if resp.ok:
+                return True, "ok"
+            try:
+                err = resp.json().get("error", {})
+                reason = err.get("error_user_title", err.get("message", "Unknown"))
+            except Exception:
+                reason = f"HTTP {resp.status_code}"
+            return False, reason
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            if attempt < 2:
+                time.sleep([5, 15][attempt])
+            else:
+                return False, str(e)[:100]
+    return False, "no response"
+
+
+def _run_ad_level_midnight(config: Config, campaign_spend: dict, dry_run: bool) -> list[MidnightAdAction]:
+    """
+    Ad-level midnight restart.
+
+    Turn ON ad IF:
+    - Parent campaign ACTIVE + had spend > $5 yesterday
+    - Ad name does NOT contain 'OFF'
+    - Ad currently PAUSED
+    """
+    # Which campaigns spent > $5 yesterday?
+    qualifying_ids = {
+        cid for cid, cdata in campaign_spend.items()
+        if cdata["spend"] > MIN_YESTERDAY_CAMPAIGN_SPEND_ADS
+    }
+    logger.info(
+        f"AD midnight: {len(qualifying_ids)} campaigns spent > ${MIN_YESTERDAY_CAMPAIGN_SPEND_ADS:.0f} yesterday"
+    )
+    if not qualifying_ids:
+        return []
+
+    # Confirm those campaigns are currently ACTIVE
+    campaign_statuses = _fetch_campaign_statuses(config, qualifying_ids)
+    active_ids = {
+        cid for cid, info in campaign_statuses.items()
+        if info["effective_status"] == "ACTIVE"
+    }
+    logger.info(f"AD midnight: {len(active_ids)} of those campaigns are currently ACTIVE")
+    if not active_ids:
+        return []
+
+    paused_ads = _fetch_paused_ads(config)
+
+    actions: list[MidnightAdAction] = []
+    activated = 0
+    failed = 0
+    skipped_off = 0
+    skipped_wrong_campaign = 0
+
+    for ad in paused_ads:
+        cid = ad["campaign_id"]
+        if cid not in active_ids:
+            skipped_wrong_campaign += 1
+            continue
+
+        if "OFF" in ad["name"].upper():
+            skipped_off += 1
+            continue
+
+        campaign_name = campaign_statuses.get(cid, {}).get("name", "Unknown")
+        yesterday_spend = campaign_spend.get(cid, {}).get("spend", 0)
+
+        if dry_run:
+            actions.append(MidnightAdAction(
+                ad_id=ad["id"],
+                ad_name=ad["name"],
+                adset_name=ad["adset_name"],
+                campaign_name=campaign_name,
+                campaign_yesterday_spend=yesterday_spend,
+                action="would_activate",
+                reason="dry run",
+            ))
+            continue
+
+        ok, reason = _activate_ad(config, ad["id"])
+        if ok:
+            activated += 1
+            logger.info(f"MIDNIGHT AD RESTART: Activated {ad['id']} ({ad['name']}) — campaign {campaign_name} yesterday ${yesterday_spend:.2f}")
+            actions.append(MidnightAdAction(
+                ad_id=ad["id"],
+                ad_name=ad["name"],
+                adset_name=ad["adset_name"],
+                campaign_name=campaign_name,
+                campaign_yesterday_spend=yesterday_spend,
+                action="activated",
+                reason=reason,
+            ))
+        else:
+            failed += 1
+            logger.warning(f"MIDNIGHT AD RESTART: Failed to activate {ad['id']}: {reason}")
+            actions.append(MidnightAdAction(
+                ad_id=ad["id"],
+                ad_name=ad["name"],
+                adset_name=ad["adset_name"],
+                campaign_name=campaign_name,
+                campaign_yesterday_spend=yesterday_spend,
+                action="failed",
+                reason=reason,
+            ))
+
+    logger.info(
+        f"Midnight AD restart complete: {activated} activated │ "
         f"{failed} failed │ {skipped_off} skipped OFF │ "
         f"{skipped_wrong_campaign} skipped (campaign not qualifying)"
     )
     return actions
+
+
+def build_ad_midnight_slack_message(actions: list[MidnightAdAction], dry_run: bool) -> dict | None:
+    if not actions:
+        return None
+    now = datetime.now(AEST).strftime("%d %b %H:%M AEST")
+    mode = "DRY RUN" if dry_run else "LIVE"
+
+    activated = [a for a in actions if a.action in ("activated", "would_activate")]
+    failed = [a for a in actions if a.action == "failed"]
+
+    blocks = []
+    blocks.append({
+        "type": "header",
+        "text": {"type": "plain_text", "text": f"🌅 Midnight Ad Restart — {now}"}
+    })
+
+    parts = []
+    if activated:
+        verb = "would activate" if dry_run else "activated"
+        parts.append(f"🟢 {len(activated)} {verb}")
+    if failed:
+        parts.append(f"⚠️ {len(failed)} failed")
+
+    blocks.append({
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": (
+            f"*[{mode}]* " + " │ ".join(parts) + "\n"
+            f"_Rule: campaign ACTIVE & yesterday spend > "
+            f"${MIN_YESTERDAY_CAMPAIGN_SPEND_ADS:.0f}; ad PAUSED & name does NOT contain 'OFF'_"
+        )}
+    })
+    blocks.append({"type": "divider"})
+
+    MAX_DISPLAY = 20
+
+    def _fmt(a: MidnightAdAction, emoji: str) -> str:
+        return (
+            f"{emoji} *{a.ad_name}*\n"
+            f"Campaign: `{a.campaign_name}` │ Adset: `{a.adset_name}` │ yesterday spend ${a.campaign_yesterday_spend:.2f}"
+        )
+
+    if activated:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "🟢 *Activated*"}})
+        for a in activated[:MAX_DISPLAY]:
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": _fmt(a, "🟢")}})
+        overflow = len(activated) - min(MAX_DISPLAY, len(activated))
+        if overflow > 0:
+            blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f"_+{overflow} more_"}]})
+        blocks.append({"type": "divider"})
+
+    if failed:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "⚠️ *Failed*"}})
+        for a in failed[:MAX_DISPLAY]:
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": _fmt(a, "⚠️") + f"\n_{a.reason}_"}})
+
+    return {"blocks": blocks}
+
+
+def send_ad_midnight_report(actions: list[MidnightAdAction], dry_run: bool, config: Config) -> bool:
+    payload = build_ad_midnight_slack_message(actions, dry_run)
+    if payload is None:
+        logger.info("No midnight ad restart actions — skipping Slack")
+        return True
+    try:
+        resp = requests.post(config.slack_webhook_url, json=payload, timeout=10)
+        if not resp.ok:
+            logger.error(f"Slack rejected midnight ad report: {resp.status_code} — {resp.text[:300]}")
+            return False
+        return True
+    except requests.RequestException as e:
+        logger.error(f"Failed to send midnight ad report: {e}")
+        return False
 
 
 def build_midnight_slack_message(actions: list[MidnightAction], dry_run: bool) -> dict | None:

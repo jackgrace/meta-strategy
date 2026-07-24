@@ -19,7 +19,11 @@ from early_fatigue import analyze_early_fatigue
 from auto_pause import find_pause_candidates, execute_pause, send_pause_report
 from stop_loss import run_stop_loss as _run_stop_loss, send_stop_loss_report
 from testing_kill import run_testing_kill as _run_testing_kill, send_testing_kill_report
-from midnight_restart import run_midnight_restart as _run_midnight_restart, send_midnight_report
+from midnight_restart import (
+    run_midnight_restart as _run_midnight_restart,
+    send_midnight_report,
+    send_ad_midnight_report,
+)
 from slack_reporter import send_testing_missed_opps, send_early_fatigue_report
 
 logging.basicConfig(
@@ -149,19 +153,23 @@ def run_testing_kill() -> dict:
 
 
 def run_midnight_restart() -> dict:
-    """Midnight adset restart across all accounts."""
+    """Midnight adset + ad restart across all accounts."""
     dry_run = _dry_run()
     mode = "DRY RUN" if dry_run else "LIVE"
     per_account = []
     for config in _per_account_configs():
         logger.info(f"--- Midnight restart: account {config.meta_ad_account_id} ---")
-        actions = _run_midnight_restart(config, dry_run=dry_run)
-        send_midnight_report(actions, dry_run, config)
+        adset_actions, ad_actions = _run_midnight_restart(config, dry_run=dry_run)
+        send_midnight_report(adset_actions, dry_run, config)
+        send_ad_midnight_report(ad_actions, dry_run, config)
         per_account.append({
             "account": config.meta_ad_account_id,
-            "activated": sum(1 for a in actions if a.action == "activated"),
-            "would_activate": sum(1 for a in actions if a.action == "would_activate"),
-            "failed": sum(1 for a in actions if a.action == "failed"),
+            "adsets_activated": sum(1 for a in adset_actions if a.action == "activated"),
+            "adsets_would_activate": sum(1 for a in adset_actions if a.action == "would_activate"),
+            "adsets_failed": sum(1 for a in adset_actions if a.action == "failed"),
+            "ads_activated": sum(1 for a in ad_actions if a.action == "activated"),
+            "ads_would_activate": sum(1 for a in ad_actions if a.action == "would_activate"),
+            "ads_failed": sum(1 for a in ad_actions if a.action == "failed"),
         })
     return {"status": "ok", "mode": mode, "per_account": per_account}
 
