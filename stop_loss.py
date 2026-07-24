@@ -55,7 +55,7 @@ TESTING_ADSET_CPA_ATC_THRESHOLD = 10.0
 
 # CBO campaigns — adset-level rule (today's metrics)
 CBO_ADSET_SPEND_THRESHOLD = 100.0
-CBO_ADSET_ROAS_THRESHOLD = 1.8
+CBO_ADSET_ROAS_THRESHOLD = 1.6
 
 
 @dataclass
