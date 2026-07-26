@@ -13,6 +13,7 @@ ADSET rule — turn ON adset IF:
 AD rule — turn ON ad IF:
 - Parent campaign is ACTIVE
 - Parent campaign had spend > $5 yesterday
+- Campaign name contains CC, SCALE, or VALUE (excludes TESTING)
 - Ad name does NOT contain 'OFF'
 - Ad is currently PAUSED
 """
@@ -403,13 +404,15 @@ def _run_ad_level_midnight(config: Config, campaign_spend: dict, dry_run: bool) 
     - Ad name does NOT contain 'OFF'
     - Ad currently PAUSED
     """
-    # Which campaigns spent > $5 yesterday?
+    # Which campaigns spent > $5 yesterday AND match CC/SCALE/VALUE?
+    # Excludes TESTING and any other campaign types.
     qualifying_ids = {
         cid for cid, cdata in campaign_spend.items()
         if cdata["spend"] > MIN_YESTERDAY_CAMPAIGN_SPEND_ADS
+        and any(k in cdata["name"].upper().replace("|", " ").split() for k in TARGET_KEYWORDS)
     }
     logger.info(
-        f"AD midnight: {len(qualifying_ids)} campaigns spent > ${MIN_YESTERDAY_CAMPAIGN_SPEND_ADS:.0f} yesterday"
+        f"AD midnight: {len(qualifying_ids)} CC/SCALE/VALUE campaigns spent > ${MIN_YESTERDAY_CAMPAIGN_SPEND_ADS:.0f} yesterday"
     )
     if not qualifying_ids:
         return []
@@ -517,7 +520,7 @@ def build_ad_midnight_slack_message(actions: list[MidnightAdAction], dry_run: bo
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* " + " │ ".join(parts) + "\n"
-            f"_Rule: campaign ACTIVE & yesterday spend > "
+            f"_Rule: CC/SCALE/VALUE campaign ACTIVE & yesterday spend > "
             f"${MIN_YESTERDAY_CAMPAIGN_SPEND_ADS:.0f}; ad PAUSED & name does NOT contain 'OFF'_"
         )}
     })
