@@ -53,6 +53,10 @@ TESTING_ADSET_SPEND_THRESHOLD = 50.0        # applies to all TESTING adsets
 TESTING_ADSET_ROAS_THRESHOLD = 1.6
 TESTING_ADSET_CPA_ATC_THRESHOLD = 10.0
 
+# TESTING campaigns — ad-level rule (rolling 7d metrics)
+TESTING_AD_SPEND_THRESHOLD_7D = 50.0
+TESTING_AD_ROAS_THRESHOLD_7D = 1.6
+
 # CBO campaigns — adset-level rule (today's metrics)
 CBO_ADSET_SPEND_THRESHOLD = 100.0
 CBO_ADSET_ROAS_THRESHOLD = 1.6
@@ -202,6 +206,99 @@ def _fetch_today_metrics(config: Config) -> dict:
         params = None
 
     logger.info(f"Fetched today's metrics for {len(ads)} ads across {page_count} pages")
+    return ads
+
+
+def _fetch_testing_ads_7d(config: Config) -> dict:
+    """
+    Rolling 7-day ad-level insights for TESTING campaigns only.
+
+    Includes ACTIVE and PAUSED ads (so a recovering PAUSED ad shows up
+    for restart). Filters to impressions > 0 so ads that never delivered
+    in the window are skipped.
+    """
+    url = f"{API_BASE}/{config.meta_ad_account_id}/insights"
+    params = {
+        "access_token": config.meta_access_token,
+        "level": "ad",
+        "fields": "ad_id,ad_name,campaign_name,adset_name,spend,actions,action_values",
+        "date_preset": "last_7d",
+        "limit": 200,
+        "filtering": (
+            '[{"field":"impressions","operator":"GREATER_THAN","value":"0"},'
+            '{"field":"campaign.name","operator":"CONTAIN","value":"TESTING"}]'
+        ),
+    }
+
+    ads: dict = {}
+    page_count = 0
+    while url:
+        page_count += 1
+        resp = None
+        for attempt in range(5):
+            try:
+                resp = requests.get(url, params=params if page_count == 1 else None, timeout=120)
+                is_retryable_400 = False
+                if resp.status_code == 400:
+                    try:
+                        err = resp.json().get("error", {})
+                        code = err.get("code")
+                        subcode = err.get("error_subcode")
+                        msg = (err.get("message", "") + " " + err.get("error_user_msg", "")).lower()
+                        is_retryable_400 = (
+                            err.get("is_transient") is True
+                            or code in (1, 2, 4, 17, 32)
+                            or subcode in (1504018, 1487742, 1504044)
+                            or any(k in msg for k in ("temporarily", "limit reached", "too many", "try again", "load", "unavailable"))
+                        )
+                    except Exception:
+                        pass
+                if (resp.status_code in (403, 500, 502, 503, 504) or is_retryable_400) and attempt < 4:
+                    wait = [30, 60, 120, 240][attempt]
+                    logger.warning(f"TESTING 7d fetch {resp.status_code}, retrying in {wait}s (attempt {attempt + 1}/5)")
+                    time.sleep(wait)
+                    continue
+                break
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                if attempt < 4:
+                    wait = [30, 60, 120, 240][attempt]
+                    logger.warning(f"TESTING 7d fetch network error, retrying in {wait}s: {e}")
+                    time.sleep(wait)
+                else:
+                    raise
+
+        if not resp.ok:
+            body_preview = resp.text[:400]
+            logger.error(f"TESTING 7d fetch error {resp.status_code}: {body_preview}")
+            raise requests.exceptions.HTTPError(
+                f"Meta {resp.status_code}: {body_preview}", response=resp,
+            )
+
+        data = resp.json()
+        for row in data.get("data", []):
+            spend = float(row.get("spend", 0))
+            revenue = 0.0
+            purchases = 0
+            for av in row.get("action_values", []) or []:
+                if av.get("action_type") == "purchase":
+                    revenue = float(av.get("value", 0))
+            for a in row.get("actions", []) or []:
+                if a.get("action_type") == "purchase":
+                    purchases = int(float(a.get("value", 0)))
+            ads[row["ad_id"]] = {
+                "ad_name": row.get("ad_name", "Unknown"),
+                "campaign_name": row.get("campaign_name", "Unknown"),
+                "adset_name": row.get("adset_name", "Unknown"),
+                "spend": spend,
+                "revenue": revenue,
+                "purchases": purchases,
+                "roas": revenue / spend if spend > 0 else 0,
+            }
+        paging = data.get("paging", {})
+        url = paging.get("next")
+        params = None
+
+    logger.info(f"Fetched TESTING 7d metrics for {len(ads)} ads across {page_count} pages")
     return ads
 
 
@@ -632,9 +729,94 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 purchases=purchases,
             ))
 
+    # === TESTING ad-level stop-loss / restart (rolling 7d metrics) ===
+    testing_ad_stop = 0
+    testing_ad_restart = 0
+    testing_ad_fail = 0
+
+    try:
+        testing_7d = _fetch_testing_ads_7d(config)
+    except Exception as e:
+        logger.error(f"TESTING 7d fetch failed: {e}")
+        testing_7d = {}
+
+    if testing_7d:
+        try:
+            testing_ad_info = fetch_ad_statuses(config, ad_ids=set(testing_7d.keys()))
+        except Exception as e:
+            logger.error(f"TESTING ad status fetch failed: {e}")
+            testing_ad_info = {}
+
+        for ad_id, ad in testing_7d.items():
+            info = testing_ad_info.get(ad_id, {})
+            status = info.get("status", "UNKNOWN")
+            current_ad_name = info.get("name", ad["ad_name"])
+            current_adset_name = info.get("adset_name", ad["adset_name"])
+
+            # Skip markers
+            if "OFF" in current_adset_name.upper():
+                continue
+            if "RUN" in current_ad_name.upper():
+                continue
+
+            spend = ad["spend"]
+            roas = ad["roas"]
+
+            # Spend gate for both directions
+            if spend <= TESTING_AD_SPEND_THRESHOLD_7D:
+                continue
+
+            # STOP: ACTIVE + 7d spend > $50 + 7d ROAS < 1.6
+            if status == "ACTIVE" and roas < TESTING_AD_ROAS_THRESHOLD_7D:
+                if dry_run:
+                    action, reason = "would_pause", "dry run"
+                else:
+                    success, reason = _update_ad_status(config, ad_id, "PAUSED")
+                    if success:
+                        action = "paused"
+                        testing_ad_stop += 1
+                        logger.info(f"TESTING AD STOP (7d): Paused {ad_id} ({current_ad_name}) — 7d spend ${spend:.2f}, ROAS {roas:.2f}")
+                    else:
+                        action = "failed"
+                        testing_ad_fail += 1
+                        logger.warning(f"TESTING AD STOP (7d): Failed to pause {ad_id}: {reason}")
+
+                actions.append(StopLossAction(
+                    ad_id=ad_id, ad_name=current_ad_name,
+                    campaign_name=ad["campaign_name"], adset_name=current_adset_name,
+                    action=action, reason=f"7d: {reason}" if action != "failed" else reason,
+                    spend=spend, roas=roas, revenue=ad["revenue"], purchases=ad["purchases"],
+                    adset_spend=0.0, adset_roas=0.0,
+                ))
+                continue
+
+            # RESTART: PAUSED + 7d spend > $50 + 7d ROAS >= 1.6
+            if status == "PAUSED" and roas >= TESTING_AD_ROAS_THRESHOLD_7D:
+                if dry_run:
+                    action, reason = "would_activate", "dry run"
+                else:
+                    success, reason = _update_ad_status(config, ad_id, "ACTIVE")
+                    if success:
+                        action = "activated"
+                        testing_ad_restart += 1
+                        logger.info(f"TESTING AD RESTART (7d): Activated {ad_id} ({current_ad_name}) — 7d spend ${spend:.2f}, ROAS {roas:.2f}")
+                    else:
+                        action = "failed"
+                        testing_ad_fail += 1
+                        logger.warning(f"TESTING AD RESTART (7d): Failed to activate {ad_id}: {reason}")
+
+                actions.append(StopLossAction(
+                    ad_id=ad_id, ad_name=current_ad_name,
+                    campaign_name=ad["campaign_name"], adset_name=current_adset_name,
+                    action=action, reason=f"7d: {reason}" if action != "failed" else reason,
+                    spend=spend, roas=roas, revenue=ad["revenue"], purchases=ad["purchases"],
+                    adset_spend=0.0, adset_roas=0.0,
+                ))
+
     logger.info(
         f"Stop-loss complete: "
         f"AD (CC/VALUE/SCALE): {ad_stop} paused, {ad_restart} activated, {ad_fail} failed │ "
+        f"AD (TESTING 7d): {testing_ad_stop} paused, {testing_ad_restart} activated, {testing_ad_fail} failed │ "
         f"ADSET (CC/VALUE/SCALE): {adset_stop} paused, {adset_restart} activated, {adset_fail} failed │ "
         f"ADSET (TESTING): {testing_stop} paused, {testing_restart} activated, {testing_fail} failed │ "
         f"ADSET (CBO): {cbo_stop} paused, {cbo_restart} activated, {cbo_fail} failed"
@@ -691,6 +873,8 @@ def build_stop_loss_slack_message(
             f"_Adset restart: (spend>${ADSET_RESTART_SPEND_THRESHOLD:.0f} & ROAS>{ADSET_RESTART_ROAS_THRESHOLD}) OR (spend ${ADSET_RESTART_LOW_SPEND_MIN:.0f}-${ADSET_RESTART_LOW_SPEND_MAX:.0f} & has purchases)_\n"
             f"_TESTING adset stop: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{TESTING_ADSET_ROAS_THRESHOLD}_\n"
             f"_TESTING adset restart: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS>={TESTING_ADSET_ROAS_THRESHOLD}_\n"
+            f"_TESTING ad stop (7d): spend>${TESTING_AD_SPEND_THRESHOLD_7D:.0f} & ROAS<{TESTING_AD_ROAS_THRESHOLD_7D}_\n"
+            f"_TESTING ad restart (7d): spend>${TESTING_AD_SPEND_THRESHOLD_7D:.0f} & ROAS>={TESTING_AD_ROAS_THRESHOLD_7D}_\n"
             f"_CBO adset stop: spend>${CBO_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{CBO_ADSET_ROAS_THRESHOLD}_\n"
             f"_CBO adset restart: spend>${CBO_ADSET_SPEND_THRESHOLD:.0f} & ROAS>{CBO_ADSET_ROAS_THRESHOLD}_"
         )}
@@ -705,12 +889,18 @@ def build_stop_loss_slack_message(
         if a.purchases > 0:
             cpa = a.spend / a.purchases
             cpa_line = f" │ CPA: ${cpa:.2f}"
-        return (
-            f"{emoji} *{a.ad_name}*\n"
-            f"Campaign: `{a.campaign_name}` │ Adset: `{a.adset_name}`\n"
-            f"Ad: spend ${a.spend:.2f} │ ROAS {a.roas:.2f}x │ Rev ${a.revenue:.2f} │ {a.purchases} purchases{cpa_line}\n"
-            f"Adset: spend ${a.adset_spend:.2f} │ ROAS {a.adset_roas:.2f}x"
-        )
+        # TESTING 7d ad actions carry adset_spend=0 (no adset aggregate). Label
+        # the window and skip the misleading "Adset: spend $0" line for those.
+        is_7d = "7d" in (a.reason or "")
+        window = "7d" if is_7d else "Today"
+        lines = [
+            f"{emoji} *{a.ad_name}*",
+            f"Campaign: `{a.campaign_name}` │ Adset: `{a.adset_name}`",
+            f"Ad ({window}): spend ${a.spend:.2f} │ ROAS {a.roas:.2f}x │ Rev ${a.revenue:.2f} │ {a.purchases} purchases{cpa_line}",
+        ]
+        if a.adset_spend > 0 or a.adset_roas > 0:
+            lines.append(f"Adset: spend ${a.adset_spend:.2f} │ ROAS {a.adset_roas:.2f}x")
+        return "\n".join(lines)
 
     def _format_adset(a: AdsetAction, emoji: str) -> str:
         cpa_line = ""
