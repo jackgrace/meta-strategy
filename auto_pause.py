@@ -2,7 +2,7 @@
 Auto-pause agent.
 
 Finds ads that are older than 14 days with less than $20 spend in the
-last 14 days, pauses them, and adds " - OFF-SPEND" to the name.
+last 7 days, pauses them, and adds " - OFF" to the name.
 
 Dry-run by default — set AUTO_PAUSE_ENABLED=true to go live.
 """
@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 
 AEST = timezone(timedelta(hours=10))
 
-SPEND_THRESHOLD = 30.0
-LOOKBACK_DAYS = 14
-MIN_AD_AGE_DAYS = 14
+SPEND_THRESHOLD = 15.0
+LOOKBACK_DAYS = 7
+MIN_AD_AGE_DAYS = 7
 
 
 @dataclass
@@ -133,9 +133,9 @@ def find_pause_candidates(
         campaign_name = spend_data.get("campaign_name") or info.get("campaign_name", "Unknown")
         adset_name = spend_data.get("adset_name") or info.get("adset_name", "Unknown")
 
-        # Only check target campaigns (CC or VALUE, whole word)
+        # Only check target campaigns (CC, VALUE, or SCALE, whole word)
         campaign_parts = [p.strip() for p in campaign_name.upper().replace("|", " ").split()]
-        if "CC" not in campaign_parts and "VALUE" not in campaign_parts:
+        if not any(k in campaign_parts for k in ("CC", "VALUE", "SCALE")):
             skipped_campaign += 1
             continue
 
@@ -179,7 +179,7 @@ def find_pause_candidates(
     logger.info(
         f"Auto-pause: {len(all_ad_ids)} ads checked │ "
         f"{skipped_paused} already paused │ {skipped_parent_off} parent off │ "
-        f"{skipped_campaign} not CC/VALUE │ {skipped_off} already OFF │ "
+        f"{skipped_campaign} not CC/VALUE/SCALE │ {skipped_off} already OFF │ "
         f"{skipped_young} too young (<{MIN_AD_AGE_DAYS}d) │ "
         f"{len(candidates)} candidates (<${SPEND_THRESHOLD} in {LOOKBACK_DAYS}d)"
     )
@@ -216,8 +216,8 @@ def execute_pause(candidates: list[PauseCandidate], config: Config, dry_run: boo
                 logger.warning(f"Could not pause {c.ad_id}: {reason}")
                 continue
 
-            # Step 2: rename with OFF-SPEND suffix (separate call to avoid creative validation)
-            new_name = f"{c.ad_name} - OFF-SPEND"
+            # Step 2: rename with OFF suffix (separate call to avoid creative validation)
+            new_name = f"{c.ad_name} - OFF"
             try:
                 rename_resp = requests.post(
                     f"{url}?access_token={config.meta_access_token}",
@@ -261,7 +261,7 @@ def build_pause_slack_message(candidates: list[PauseCandidate], dry_run: bool) -
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* *{len(candidates)} ads* {action_text}\n"
-            f"Rule: CC or VALUE campaigns │ created >{MIN_AD_AGE_DAYS} days ago │ <${SPEND_THRESHOLD:.0f} spend in last {LOOKBACK_DAYS} days\n"
+            f"Rule: CC/VALUE/SCALE campaigns │ created >{MIN_AD_AGE_DAYS} days ago │ <${SPEND_THRESHOLD:.0f} spend in last {LOOKBACK_DAYS} days\n"
             f"Total 14d spend on flagged ads: *${total_spend:.2f}*"
         )}
     })

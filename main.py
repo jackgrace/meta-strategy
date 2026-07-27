@@ -52,11 +52,10 @@ def _dry_run() -> bool:
 
 def run_check() -> dict:
     """
-    Daily run: auto-pause (14d spend<\$30) is DISABLED.
-    /pause and /slack/pause endpoints still call run_auto_pause() directly.
+    Daily run: auto-pause (CC/VALUE/SCALE, 7d spend < \$15, ad age > 7d).
+    Runs at 1am AEST (after 12:05am midnight restart).
     """
-    logger.info("Auto-pause disabled — daily run is a no-op.")
-    return {"status": "ok", "message": "auto-pause disabled"}
+    return run_auto_pause()
 
 
 def run_fatigue_only() -> dict:
