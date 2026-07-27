@@ -6,7 +6,7 @@ Runs daily at 12:05am AEST.
 ADSET rule — turn ON adset IF:
 - Parent campaign is ACTIVE
 - Parent campaign had spend > $1 yesterday
-- Campaign name contains CC, SCALE, or VALUE
+- Campaign name contains CC, SCALE, VALUE, or TESTING
 - Adset name does NOT contain 'OFF'
 - Adset is currently PAUSED
 
@@ -34,7 +34,9 @@ AEST = timezone(timedelta(hours=10))
 
 MIN_YESTERDAY_CAMPAIGN_SPEND = 1.0            # adset rule
 MIN_YESTERDAY_CAMPAIGN_SPEND_ADS = 5.0        # ad rule
-TARGET_KEYWORDS = {"CC", "SCALE", "VALUE"}    # adset rule only
+ADSET_TARGET_KEYWORDS = {"CC", "SCALE", "VALUE", "TESTING"}   # adset midnight
+AD_TARGET_KEYWORDS = {"CC", "SCALE", "VALUE"}                 # ad midnight
+TARGET_KEYWORDS = ADSET_TARGET_KEYWORDS  # legacy alias — used by adset rule
 
 
 @dataclass
@@ -409,7 +411,7 @@ def _run_ad_level_midnight(config: Config, campaign_spend: dict, dry_run: bool) 
     qualifying_ids = {
         cid for cid, cdata in campaign_spend.items()
         if cdata["spend"] > MIN_YESTERDAY_CAMPAIGN_SPEND_ADS
-        and any(k in cdata["name"].upper().replace("|", " ").split() for k in TARGET_KEYWORDS)
+        and any(k in cdata["name"].upper().replace("|", " ").split() for k in AD_TARGET_KEYWORDS)
     }
     logger.info(
         f"AD midnight: {len(qualifying_ids)} CC/SCALE/VALUE campaigns spent > ${MIN_YESTERDAY_CAMPAIGN_SPEND_ADS:.0f} yesterday"

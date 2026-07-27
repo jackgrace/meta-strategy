@@ -49,7 +49,8 @@ ADSET_RESTART_LOW_SPEND_MIN = 250.0       # alt band: spend $250-500 with purcha
 ADSET_RESTART_LOW_SPEND_MAX = 500.0
 
 # TESTING campaigns — adset-level rule (today's metrics)
-TESTING_ADSET_SPEND_THRESHOLD = 30.0
+TESTING_ADSET_SPEND_THRESHOLD = 30.0        # default for TESTING adsets
+TESTING_ADSET_WINNER_SPEND_THRESHOLD = 100.0  # higher gate if adset name has WINNER
 TESTING_ADSET_ROAS_THRESHOLD = 1.6
 TESTING_ADSET_CPA_ATC_THRESHOLD = 10.0
 
@@ -491,9 +492,17 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         if "OFF" in current_name.upper():
             continue
 
-        # STOP-LOSS: ACTIVE and spend > $30 and ROAS < 1.6
+        # WINNER-named adsets get a higher spend gate ($100 vs $30)
+        # so we don't kill proven creatives on a slow morning
+        is_winner = "WINNER" in current_name.upper()
+        spend_gate = (
+            TESTING_ADSET_WINNER_SPEND_THRESHOLD if is_winner
+            else TESTING_ADSET_SPEND_THRESHOLD
+        )
+
+        # STOP-LOSS: ACTIVE and spend > gate and ROAS < 1.6
         if (status == "ACTIVE"
-            and spend > TESTING_ADSET_SPEND_THRESHOLD
+            and spend > spend_gate
             and roas < TESTING_ADSET_ROAS_THRESHOLD):
 
             if dry_run:
@@ -522,9 +531,9 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART: PAUSED, spend > $30, ROAS >= 1.6
+        # RESTART: PAUSED, spend > gate ($30 default, $100 for WINNER), ROAS >= 1.6
         if (status == "PAUSED"
-            and spend > TESTING_ADSET_SPEND_THRESHOLD
+            and spend > spend_gate
             and roas >= TESTING_ADSET_ROAS_THRESHOLD):
 
             if dry_run:
@@ -689,8 +698,8 @@ def build_stop_loss_slack_message(
             f"_Rules: CC, VALUE, or SCALE campaigns │ Today's metrics_\n"
             f"_Adset stop: (spend>${ADSET_STOP_NO_PURCHASE_SPEND:.0f} & 0 purchases) OR (spend>${ADSET_STOP_SPEND_THRESHOLD:.0f} & ROAS<{ADSET_STOP_ROAS_THRESHOLD})_\n"
             f"_Adset restart: (spend>${ADSET_RESTART_SPEND_THRESHOLD:.0f} & ROAS>{ADSET_RESTART_ROAS_THRESHOLD}) OR (spend ${ADSET_RESTART_LOW_SPEND_MIN:.0f}-${ADSET_RESTART_LOW_SPEND_MAX:.0f} & has purchases)_\n"
-            f"_TESTING adset stop: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{TESTING_ADSET_ROAS_THRESHOLD}_\n"
-            f"_TESTING adset restart: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS>={TESTING_ADSET_ROAS_THRESHOLD}_\n"
+            f"_TESTING adset stop: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} (or ${TESTING_ADSET_WINNER_SPEND_THRESHOLD:.0f} if WINNER in name) & ROAS<{TESTING_ADSET_ROAS_THRESHOLD}_\n"
+            f"_TESTING adset restart: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} (or ${TESTING_ADSET_WINNER_SPEND_THRESHOLD:.0f} if WINNER) & ROAS>={TESTING_ADSET_ROAS_THRESHOLD}_\n"
             f"_CBO adset stop: spend>${CBO_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{CBO_ADSET_ROAS_THRESHOLD}_\n"
             f"_CBO adset restart: spend>${CBO_ADSET_SPEND_THRESHOLD:.0f} & ROAS>{CBO_ADSET_ROAS_THRESHOLD}_"
         )}
