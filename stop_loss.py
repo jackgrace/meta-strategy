@@ -610,9 +610,14 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             and cost_per_atc > TESTING_ADSET_EXPENSIVE_ATC_COST
             and purchases == 0
         )
+        # Zero-ATC kill. The (0 purchases OR ROAS < 1.6) guard means an adset
+        # that somehow drove profitable purchases without tracked ATCs is
+        # protected — rare, but avoids killing a real winner on a tracking
+        # gap. In practice almost all 0-ATC adsets also have 0 purchases.
         zero_atc_stop = (
             spend > TESTING_ADSET_ZERO_ATC_SPEND
             and atcs == 0
+            and (purchases == 0 or roas < TESTING_ADSET_ROAS_THRESHOLD)
         )
         if status == "ACTIVE" and (primary_stop or expensive_atc_stop or zero_atc_stop):
             if zero_atc_stop and not primary_stop and not expensive_atc_stop:
@@ -902,7 +907,7 @@ def build_stop_loss_slack_message(
             f"_Adset restart: (spend>${ADSET_RESTART_SPEND_THRESHOLD:.0f} & ROAS>{ADSET_RESTART_ROAS_THRESHOLD}) OR (spend ${ADSET_RESTART_LOW_SPEND_MIN:.0f}-${ADSET_RESTART_LOW_SPEND_MAX:.0f} & has purchases)_\n"
             f"_TESTING adset stop: (spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{TESTING_ADSET_ROAS_THRESHOLD}) OR "
             f"(spend>${TESTING_ADSET_EXPENSIVE_ATC_SPEND:.0f} & CPA/ATC>${TESTING_ADSET_EXPENSIVE_ATC_COST:.0f} & 0p) OR "
-            f"(spend>${TESTING_ADSET_ZERO_ATC_SPEND:.0f} & 0 ATCs)_\n"
+            f"(spend>${TESTING_ADSET_ZERO_ATC_SPEND:.0f} & 0 ATCs & (0p OR ROAS<{TESTING_ADSET_ROAS_THRESHOLD}))_\n"
             f"_TESTING adset restart: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS>={TESTING_ADSET_ROAS_THRESHOLD}_\n"
             f"_TESTING ad stop (7d): spend>${TESTING_AD_SPEND_THRESHOLD_7D:.0f} & ROAS<{TESTING_AD_ROAS_THRESHOLD_7D}_\n"
             f"_TESTING ad restart (7d): spend>${TESTING_AD_SPEND_THRESHOLD_7D:.0f} & ROAS>={TESTING_AD_ROAS_THRESHOLD_7D}_\n"
