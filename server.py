@@ -28,6 +28,7 @@ from main import (
     run_midnight_restart,
     run_surf_scale,
     run_midnight_budget_reset,
+    run_winner_demotion,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._run_surf_scale_endpoint(source="http")
         elif self.path == "/budget-reset":
             self._run_budget_reset_endpoint(source="http")
+        elif self.path == "/winner-demotion":
+            self._run_winner_demotion_endpoint(source="http")
         else:
             self._respond(404, {"error": "not found"})
 
@@ -80,6 +83,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._handle_slack(run_surf_scale, "Running surf scale check now...")
         elif self.path == "/slack/budget-reset":
             self._handle_slack(run_midnight_budget_reset, "Running midnight budget reset now...")
+        elif self.path == "/slack/winner-demotion":
+            self._handle_slack(run_winner_demotion, "Running winner demotion now...")
         elif self.path == "/run":
             self._run_check(source="http")
         elif self.path == "/fatigue":
@@ -172,6 +177,15 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(200, result)
         except Exception as e:
             logger.error(f"Budget reset failed: {e}")
+            self._respond(500, {"status": "error", "message": str(e)})
+
+    def _run_winner_demotion_endpoint(self, source: str):
+        logger.info(f"Manual trigger via {source} — winner demotion")
+        try:
+            result = run_winner_demotion()
+            self._respond(200, result)
+        except Exception as e:
+            logger.error(f"Winner demotion failed: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
 
     def _manual_activate(self):
@@ -315,6 +329,15 @@ def _run_daily_scheduler():
             except Exception as e2:
                 logger.error(f"Auto-pause retry also failed: {e2}")
 
+        # Winner demotion — piggybacked on the same daily slot. Cleans up
+        # WINNER-tagged adsets that haven't earned the tag over the last 3d.
+        try:
+            logger.info("Scheduler: running daily WINNER demotion")
+            run_winner_demotion()
+        except Exception as e:
+            logger.error(f"Scheduled winner-demotion failed: {e}")
+            _send_failure_notification(f"winner-demotion: {e}")
+
 
 def _send_stop_loss_failure(error_msg: str):
     """Notify Slack when a stop-loss run fails."""
@@ -449,6 +472,7 @@ def start_server():
     logger.info(f"  GET  /midnight-restart — reactivate qualifying adsets")
     logger.info(f"  GET  /surf-scale     — double budget on qualifying WINNER adsets")
     logger.info(f"  GET  /budget-reset   — reset WINNER adset budgets to default")
+    logger.info(f"  GET  /winner-demotion — demote stale WINNER adsets (3d rule)")
     logger.info(f"  GET  /activate?id=X  — manually reactivate an ad/adset")
     logger.info(f"  POST /slack/trigger  — Slack: all checks")
     logger.info(f"  POST /slack/fatigue  — Slack: fatigue only")
@@ -458,6 +482,7 @@ def start_server():
     logger.info(f"  POST /slack/midnight-restart — Slack: midnight restart")
     logger.info(f"  POST /slack/surf-scale — Slack: surf scale")
     logger.info(f"  POST /slack/budget-reset — Slack: budget reset")
+    logger.info(f"  POST /slack/winner-demotion — Slack: winner demotion")
     logger.info(f"  GET  /health         — health check")
     server.serve_forever()
 

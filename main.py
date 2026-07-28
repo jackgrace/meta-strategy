@@ -29,6 +29,10 @@ from surf_scale import (
     run_midnight_budget_reset as _run_midnight_budget_reset,
     send_surf_report,
 )
+from winner_demotion import (
+    run_winner_demotion as _run_winner_demotion,
+    send_winner_demotion_report,
+)
 from slack_reporter import send_testing_missed_opps, send_early_fatigue_report
 
 logging.basicConfig(
@@ -197,6 +201,30 @@ def run_surf_scale() -> dict:
             "doubled": sum(1 for a in actions if a.action == "doubled"),
             "would_double": sum(1 for a in actions if a.action == "would_double"),
             "skipped": sum(1 for a in actions if a.action == "skipped"),
+            "failed": sum(1 for a in actions if a.action == "failed"),
+        })
+    return {"status": "ok", "mode": mode, "per_account": per_account}
+
+
+def run_winner_demotion() -> dict:
+    """Daily: strip WINNER + append OFF + pause for stale WINNER adsets (3d rule)."""
+    dry_run = _dry_run()
+    mode = "DRY RUN" if dry_run else "LIVE"
+    per_account = []
+    for config in _per_account_configs():
+        logger.info(f"--- Winner demotion: account {config.meta_ad_account_id} ---")
+        try:
+            actions = _run_winner_demotion(config, dry_run=dry_run)
+        except Exception as e:
+            logger.error(f"Winner demotion failed for {config.meta_ad_account_id}: {e}")
+            per_account.append({"account": config.meta_ad_account_id, "error": str(e)})
+            continue
+        send_winner_demotion_report(actions, dry_run, config)
+        per_account.append({
+            "account": config.meta_ad_account_id,
+            "demoted": sum(1 for a in actions if a.action == "demoted"),
+            "would_demote": sum(1 for a in actions if a.action == "would_demote"),
+            "partial": sum(1 for a in actions if a.action == "partial"),
             "failed": sum(1 for a in actions if a.action == "failed"),
         })
     return {"status": "ok", "mode": mode, "per_account": per_account}
