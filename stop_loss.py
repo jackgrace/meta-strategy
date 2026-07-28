@@ -49,21 +49,11 @@ ADSET_RESTART_LOW_SPEND_MIN = 250.0       # alt band: spend $250-500 with purcha
 ADSET_RESTART_LOW_SPEND_MAX = 500.0
 
 # TESTING campaigns — adset-level rule (today's metrics)
-TESTING_ADSET_SPEND_THRESHOLD = 50.0        # applies to all TESTING adsets
+TESTING_ADSET_SPEND_THRESHOLD = 30.0
 TESTING_ADSET_ROAS_THRESHOLD = 1.6
-TESTING_ADSET_CPA_ATC_THRESHOLD = 10.0
-
-# TESTING adset — alt "expensive ATC, no sale" pause branch (today)
-TESTING_ADSET_EXPENSIVE_ATC_SPEND = 30.0
-TESTING_ADSET_EXPENSIVE_ATC_COST = 7.0      # cost per ATC above this = expensive
-
-# TESTING adset — early zero-engagement kill (today). Catches creatives that
-# get impressions but drive no ATCs. Fires before the $50 primary trip so we
-# save the diff on structurally-dead ads.
-TESTING_ADSET_ZERO_ATC_SPEND = 20.0
 
 # TESTING campaigns — ad-level rule (rolling 7d metrics)
-TESTING_AD_SPEND_THRESHOLD_7D = 50.0
+TESTING_AD_SPEND_THRESHOLD_7D = 30.0
 TESTING_AD_ROAS_THRESHOLD_7D = 1.6
 
 # CBO campaigns — adset-level rule (today's metrics)
@@ -597,48 +587,23 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         if "OFF" in current_name.upper():
             continue
 
-        # STOP-LOSS branches (any one triggers pause):
-        #   A) primary:       spend > $50 & ROAS < 1.6
-        #   B) expensive-ATC: spend > $30 & CPA/ATC > $7 & 0 purchases
-        #   C) zero-ATC:      spend > $20 & 0 ATCs
-        primary_stop = (
-            spend > TESTING_ADSET_SPEND_THRESHOLD
-            and roas < TESTING_ADSET_ROAS_THRESHOLD
-        )
-        expensive_atc_stop = (
-            spend > TESTING_ADSET_EXPENSIVE_ATC_SPEND
-            and cost_per_atc > TESTING_ADSET_EXPENSIVE_ATC_COST
-            and purchases == 0
-        )
-        # Zero-ATC kill. The (0 purchases OR ROAS < 1.6) guard means an adset
-        # that somehow drove profitable purchases without tracked ATCs is
-        # protected — rare, but avoids killing a real winner on a tracking
-        # gap. In practice almost all 0-ATC adsets also have 0 purchases.
-        zero_atc_stop = (
-            spend > TESTING_ADSET_ZERO_ATC_SPEND
-            and atcs == 0
-            and (purchases == 0 or roas < TESTING_ADSET_ROAS_THRESHOLD)
-        )
-        if status == "ACTIVE" and (primary_stop or expensive_atc_stop or zero_atc_stop):
-            if zero_atc_stop and not primary_stop and not expensive_atc_stop:
-                branch = "zero-ATC"
-            elif expensive_atc_stop and not primary_stop:
-                branch = "expensive-ATC"
-            else:
-                branch = "ROAS"
+        # STOP: ACTIVE + spend > $30 + ROAS < 1.6
+        if (status == "ACTIVE"
+            and spend > TESTING_ADSET_SPEND_THRESHOLD
+            and roas < TESTING_ADSET_ROAS_THRESHOLD):
 
             if dry_run:
-                action, reason = "would_pause", f"dry run ({branch})"
+                action, reason = "would_pause", "dry run"
             else:
                 success, reason = _update_ad_status(config, adset_id, "PAUSED")
                 if success:
                     action = "paused"
                     testing_stop += 1
-                    logger.info(f"TESTING ADSET STOP ({branch}): Paused {adset_id} ({current_name}) — spend ${spend:.2f}, ROAS {roas:.2f}, CPA/ATC ${cost_per_atc:.2f}, {purchases} purchases")
+                    logger.info(f"TESTING ADSET STOP: Paused {adset_id} ({current_name}) — spend ${spend:.2f}, ROAS {roas:.2f}, {purchases} purchases")
                 else:
                     action = "failed"
                     testing_fail += 1
-                    logger.warning(f"TESTING ADSET STOP ({branch}): Failed to pause {adset_id}: {reason}")
+                    logger.warning(f"TESTING ADSET STOP: Failed to pause {adset_id}: {reason}")
 
             adset_actions.append(AdsetAction(
                 adset_id=adset_id,
@@ -653,7 +618,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART: PAUSED, spend > $50, ROAS >= 1.6
+        # RESTART: PAUSED + spend > $30 + ROAS >= 1.6
         if (status == "PAUSED"
             and spend > TESTING_ADSET_SPEND_THRESHOLD
             and roas >= TESTING_ADSET_ROAS_THRESHOLD):
@@ -665,7 +630,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 if success:
                     action = "activated"
                     testing_restart += 1
-                    logger.info(f"TESTING ADSET RESTART: Activated {adset_id} ({current_name}) — spend ${spend:.2f}, ROAS {roas:.2f}, CPA/ATC ${cost_per_atc:.2f}, {purchases}p / {atcs} ATC")
+                    logger.info(f"TESTING ADSET RESTART: Activated {adset_id} ({current_name}) — spend ${spend:.2f}, ROAS {roas:.2f}, {purchases}p")
                 else:
                     action = "failed"
                     testing_fail += 1
@@ -795,13 +760,14 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
 
             spend = ad["spend"]
             roas = ad["roas"]
+            purchases = ad["purchases"]
 
             # Spend gate for both directions
             if spend <= TESTING_AD_SPEND_THRESHOLD_7D:
                 continue
 
-            # STOP: ACTIVE + 7d spend > $50 + 7d ROAS < 1.6
-            if status == "ACTIVE" and roas < TESTING_AD_ROAS_THRESHOLD_7D:
+            # STOP: ACTIVE + 7d spend > $30 + (ROAS < 1.6 OR 0 purchases)
+            if status == "ACTIVE" and (roas < TESTING_AD_ROAS_THRESHOLD_7D or purchases == 0):
                 if dry_run:
                     action, reason = "would_pause", "dry run"
                 else:
@@ -824,8 +790,10 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 ))
                 continue
 
-            # RESTART: PAUSED + 7d spend > $50 + 7d ROAS >= 1.6
-            if status == "PAUSED" and roas >= TESTING_AD_ROAS_THRESHOLD_7D:
+            # RESTART: PAUSED + 7d spend > $30 + 7d ROAS >= 1.6 + purchases > 0
+            # (mirror of the pause condition — recovers only when both the ROAS
+            # bar is met AND at least one purchase landed in the 7d window)
+            if status == "PAUSED" and roas >= TESTING_AD_ROAS_THRESHOLD_7D and purchases > 0:
                 if dry_run:
                     action, reason = "would_activate", "dry run"
                 else:
@@ -905,12 +873,10 @@ def build_stop_loss_slack_message(
             f"_Rules: CC, VALUE, or SCALE campaigns │ Today's metrics_\n"
             f"_Adset stop: (spend>${ADSET_STOP_NO_PURCHASE_SPEND:.0f} & 0 purchases) OR (spend>${ADSET_STOP_SPEND_THRESHOLD:.0f} & ROAS<{ADSET_STOP_ROAS_THRESHOLD})_\n"
             f"_Adset restart: (spend>${ADSET_RESTART_SPEND_THRESHOLD:.0f} & ROAS>{ADSET_RESTART_ROAS_THRESHOLD}) OR (spend ${ADSET_RESTART_LOW_SPEND_MIN:.0f}-${ADSET_RESTART_LOW_SPEND_MAX:.0f} & has purchases)_\n"
-            f"_TESTING adset stop: (spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{TESTING_ADSET_ROAS_THRESHOLD}) OR "
-            f"(spend>${TESTING_ADSET_EXPENSIVE_ATC_SPEND:.0f} & CPA/ATC>${TESTING_ADSET_EXPENSIVE_ATC_COST:.0f} & 0p) OR "
-            f"(spend>${TESTING_ADSET_ZERO_ATC_SPEND:.0f} & 0 ATCs & (0p OR ROAS<{TESTING_ADSET_ROAS_THRESHOLD}))_\n"
+            f"_TESTING adset stop: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{TESTING_ADSET_ROAS_THRESHOLD}_\n"
             f"_TESTING adset restart: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS>={TESTING_ADSET_ROAS_THRESHOLD}_\n"
-            f"_TESTING ad stop (7d): spend>${TESTING_AD_SPEND_THRESHOLD_7D:.0f} & ROAS<{TESTING_AD_ROAS_THRESHOLD_7D}_\n"
-            f"_TESTING ad restart (7d): spend>${TESTING_AD_SPEND_THRESHOLD_7D:.0f} & ROAS>={TESTING_AD_ROAS_THRESHOLD_7D}_\n"
+            f"_TESTING ad stop (7d): spend>${TESTING_AD_SPEND_THRESHOLD_7D:.0f} & (ROAS<{TESTING_AD_ROAS_THRESHOLD_7D} OR 0 purchases) & name!contains RUN_\n"
+            f"_TESTING ad restart (7d): spend>${TESTING_AD_SPEND_THRESHOLD_7D:.0f} & ROAS>={TESTING_AD_ROAS_THRESHOLD_7D} & purchases>0_\n"
             f"_CBO adset stop: spend>${CBO_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{CBO_ADSET_ROAS_THRESHOLD}_\n"
             f"_CBO adset restart: spend>${CBO_ADSET_SPEND_THRESHOLD:.0f} & ROAS>{CBO_ADSET_ROAS_THRESHOLD}_"
         )}

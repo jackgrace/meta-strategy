@@ -26,9 +26,6 @@ from main import (
     run_stop_loss,
     run_testing_kill,
     run_midnight_restart,
-    run_surf_scale,
-    run_midnight_budget_reset,
-    run_winner_demotion,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,12 +54,6 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._run_testing_kill_endpoint(source="http")
         elif self.path == "/midnight-restart":
             self._run_midnight_restart_endpoint(source="http")
-        elif self.path == "/surf-scale":
-            self._run_surf_scale_endpoint(source="http")
-        elif self.path == "/budget-reset":
-            self._run_budget_reset_endpoint(source="http")
-        elif self.path == "/winner-demotion":
-            self._run_winner_demotion_endpoint(source="http")
         else:
             self._respond(404, {"error": "not found"})
 
@@ -79,12 +70,6 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._handle_slack(run_testing_kill, "Running testing kill check now...")
         elif self.path == "/slack/midnight-restart":
             self._handle_slack(run_midnight_restart, "Running midnight restart now...")
-        elif self.path == "/slack/surf-scale":
-            self._handle_slack(run_surf_scale, "Running surf scale check now...")
-        elif self.path == "/slack/budget-reset":
-            self._handle_slack(run_midnight_budget_reset, "Running midnight budget reset now...")
-        elif self.path == "/slack/winner-demotion":
-            self._handle_slack(run_winner_demotion, "Running winner demotion now...")
         elif self.path == "/run":
             self._run_check(source="http")
         elif self.path == "/fatigue":
@@ -159,33 +144,6 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(200, result)
         except Exception as e:
             logger.error(f"Midnight restart failed: {e}")
-            self._respond(500, {"status": "error", "message": str(e)})
-
-    def _run_surf_scale_endpoint(self, source: str):
-        logger.info(f"Manual trigger via {source} — surf scale")
-        try:
-            result = run_surf_scale()
-            self._respond(200, result)
-        except Exception as e:
-            logger.error(f"Surf scale failed: {e}")
-            self._respond(500, {"status": "error", "message": str(e)})
-
-    def _run_budget_reset_endpoint(self, source: str):
-        logger.info(f"Manual trigger via {source} — budget reset")
-        try:
-            result = run_midnight_budget_reset()
-            self._respond(200, result)
-        except Exception as e:
-            logger.error(f"Budget reset failed: {e}")
-            self._respond(500, {"status": "error", "message": str(e)})
-
-    def _run_winner_demotion_endpoint(self, source: str):
-        logger.info(f"Manual trigger via {source} — winner demotion")
-        try:
-            result = run_winner_demotion()
-            self._respond(200, result)
-        except Exception as e:
-            logger.error(f"Winner demotion failed: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
 
     def _manual_activate(self):
@@ -329,15 +287,6 @@ def _run_daily_scheduler():
             except Exception as e2:
                 logger.error(f"Auto-pause retry also failed: {e2}")
 
-        # Winner demotion — piggybacked on the same daily slot. Cleans up
-        # WINNER-tagged adsets that haven't earned the tag over the last 3d.
-        try:
-            logger.info("Scheduler: running daily WINNER demotion")
-            run_winner_demotion()
-        except Exception as e:
-            logger.error(f"Scheduled winner-demotion failed: {e}")
-            _send_failure_notification(f"winner-demotion: {e}")
-
 
 def _send_stop_loss_failure(error_msg: str):
     """Notify Slack when a stop-loss run fails."""
@@ -390,7 +339,7 @@ def _run_testing_kill_scheduler():
 
 
 def _run_midnight_restart_scheduler():
-    """Background thread: runs the midnight adset restart + budget reset at 12:05am AEST."""
+    """Background thread: runs the midnight adset restart at 12:05am AEST."""
     while True:
         now = datetime.now(AEST)
         # Next 12:05am AEST
@@ -407,31 +356,6 @@ def _run_midnight_restart_scheduler():
         except Exception as e:
             logger.error(f"Midnight restart failed: {e}")
             _send_stop_loss_failure(f"midnight-restart: {type(e).__name__}: {e}")
-
-        # Reset TESTING WINNER adset budgets back to default so surf scale
-        # starts from a clean slate for the new day.
-        try:
-            logger.info("Scheduler: running 12:05am AEST midnight budget reset")
-            run_midnight_budget_reset()
-        except Exception as e:
-            logger.error(f"Midnight budget reset failed: {e}")
-            _send_stop_loss_failure(f"budget-reset: {type(e).__name__}: {e}")
-
-
-def _run_surf_scale_scheduler():
-    """Background thread: doubles TESTING WINNER adset budgets on qualifying spend + ROAS. Every 60 min."""
-    time.sleep(90)  # let server come up first, stagger from stop-loss + testing-kill
-    consecutive_failures = 0
-    while True:
-        try:
-            logger.info("Scheduler: running 60-min surf scale check")
-            run_surf_scale()
-            consecutive_failures = 0
-        except Exception as e:
-            consecutive_failures += 1
-            logger.error(f"Surf scale check failed (consecutive: {consecutive_failures}): {e}")
-            _send_stop_loss_failure(f"surf-scale: {type(e).__name__}: {e}")
-        time.sleep(60 * 60)
 
 
 def start_server():
@@ -452,15 +376,10 @@ def start_server():
     testing_kill_thread.start()
     logger.info("Testing-kill scheduler started (every 1 hour)")
 
-    # Start 12:05am midnight adset restart scheduler (also runs budget reset)
+    # Start 12:05am midnight adset restart scheduler
     midnight_thread = threading.Thread(target=_run_midnight_restart_scheduler, daemon=True)
     midnight_thread.start()
-    logger.info("Midnight-restart scheduler started (12:05am AEST daily, includes budget reset)")
-
-    # Start 60-min surf scale scheduler
-    surf_thread = threading.Thread(target=_run_surf_scale_scheduler, daemon=True)
-    surf_thread.start()
-    logger.info("Surf-scale scheduler started (every 60 min)")
+    logger.info("Midnight-restart scheduler started (12:05am AEST daily)")
 
     server = HTTPServer(("0.0.0.0", port), TriggerHandler)
     logger.info(f"Server listening on port {port}")
@@ -470,9 +389,6 @@ def start_server():
     logger.info(f"  GET  /stoploss       — intra-day stop-loss")
     logger.info(f"  GET  /testing-kill   — testing campaign kill")
     logger.info(f"  GET  /midnight-restart — reactivate qualifying adsets")
-    logger.info(f"  GET  /surf-scale     — double budget on qualifying WINNER adsets")
-    logger.info(f"  GET  /budget-reset   — reset WINNER adset budgets to default")
-    logger.info(f"  GET  /winner-demotion — demote stale WINNER adsets (3d rule)")
     logger.info(f"  GET  /activate?id=X  — manually reactivate an ad/adset")
     logger.info(f"  POST /slack/trigger  — Slack: all checks")
     logger.info(f"  POST /slack/fatigue  — Slack: fatigue only")
@@ -480,9 +396,6 @@ def start_server():
     logger.info(f"  POST /slack/stoploss — Slack: stop-loss")
     logger.info(f"  POST /slack/testing-kill — Slack: testing kill")
     logger.info(f"  POST /slack/midnight-restart — Slack: midnight restart")
-    logger.info(f"  POST /slack/surf-scale — Slack: surf scale")
-    logger.info(f"  POST /slack/budget-reset — Slack: budget reset")
-    logger.info(f"  POST /slack/winner-demotion — Slack: winner demotion")
     logger.info(f"  GET  /health         — health check")
     server.serve_forever()
 
