@@ -6,9 +6,9 @@ Runs daily at 12:05am AEST.
 ADSET rule — turn ON adset IF:
 - Parent campaign is ACTIVE
 - Parent campaign had spend > $1 yesterday
-- Campaign name contains CC, SCALE, VALUE, or TESTING
 - Adset name does NOT contain 'OFF'
 - Adset is currently PAUSED
+(No campaign-keyword filter — any campaign counts.)
 
 AD rule — turn ON ad IF:
 - Parent campaign is ACTIVE
@@ -277,14 +277,18 @@ def run_midnight_restart(config: Config, dry_run: bool = False) -> tuple[list[Mi
     campaign_spend = _fetch_yesterday_campaign_spend(config)
 
     # Step 2: filter to campaigns matching keywords + spend > $1 yesterday
+    # Any campaign that spent yesterday qualifies — no keyword filter.
+    # We only need the parent to be active and to have had spend, so we
+    # don't wake up dead campaigns; the OFF-in-adset-name check does the
+    # per-adset filtering.
     qualifying_campaign_ids: set[str] = set()
     for cid, cdata in campaign_spend.items():
-        if cdata["spend"] > MIN_YESTERDAY_CAMPAIGN_SPEND and _is_target_campaign(cdata["name"]):
+        if cdata["spend"] > MIN_YESTERDAY_CAMPAIGN_SPEND:
             qualifying_campaign_ids.add(cid)
 
     logger.info(
-        f"{len(qualifying_campaign_ids)} campaigns qualify (CC/SCALE/VALUE + "
-        f"spend > ${MIN_YESTERDAY_CAMPAIGN_SPEND:.0f} yesterday)"
+        f"{len(qualifying_campaign_ids)} campaigns qualify "
+        f"(spend > ${MIN_YESTERDAY_CAMPAIGN_SPEND:.0f} yesterday)"
     )
 
     if not qualifying_campaign_ids:
@@ -360,7 +364,7 @@ def run_midnight_restart(config: Config, dry_run: bool = False) -> tuple[list[Mi
     logger.info(
         f"Midnight ADSET restart complete: {activated} activated │ "
         f"{failed} failed │ {skipped_off} skipped OFF │ "
-        f"{skipped_wrong_campaign} skipped (campaign not qualifying)"
+        f"{skipped_wrong_campaign} skipped (campaign not ACTIVE / no spend yesterday)"
     )
 
     # === AD-level midnight restart ===
@@ -596,7 +600,7 @@ def build_midnight_slack_message(actions: list[MidnightAction], dry_run: bool) -
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* " + " │ ".join(parts) + "\n"
-            f"_Rule: campaign ACTIVE & contains CC/SCALE/VALUE & yesterday spend > "
+            f"_Rule: campaign ACTIVE & yesterday spend > "
             f"${MIN_YESTERDAY_CAMPAIGN_SPEND:.0f}; adset PAUSED & name does NOT contain 'OFF'_"
         )}
     })
