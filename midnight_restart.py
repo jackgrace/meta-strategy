@@ -13,9 +13,9 @@ ADSET rule — turn ON adset IF:
 AD rule — turn ON ad IF:
 - Parent campaign is ACTIVE
 - Parent campaign had spend > $5 yesterday
-- Campaign name contains CC, SCALE, or VALUE (excludes TESTING)
 - Ad name does NOT contain 'OFF'
 - Ad is currently PAUSED
+(No campaign-keyword filter — any campaign counts.)
 """
 
 import logging
@@ -34,9 +34,6 @@ AEST = timezone(timedelta(hours=10))
 
 MIN_YESTERDAY_CAMPAIGN_SPEND = 1.0            # adset rule
 MIN_YESTERDAY_CAMPAIGN_SPEND_ADS = 5.0        # ad rule
-ADSET_TARGET_KEYWORDS = {"CC", "SCALE", "VALUE", "TESTING"}   # adset midnight
-AD_TARGET_KEYWORDS = {"CC", "SCALE", "VALUE"}                 # ad midnight
-TARGET_KEYWORDS = ADSET_TARGET_KEYWORDS  # legacy alias — used by adset rule
 
 
 @dataclass
@@ -58,11 +55,6 @@ class MidnightAdAction:
     campaign_yesterday_spend: float
     action: str
     reason: str
-
-
-def _is_target_campaign(name: str) -> bool:
-    parts = [p.strip() for p in name.upper().replace("|", " ").split()]
-    return any(k in parts for k in TARGET_KEYWORDS)
 
 
 def _http_get_json(config: Config, url: str, params: dict | None = None) -> dict:
@@ -409,16 +401,15 @@ def _run_ad_level_midnight(config: Config, campaign_spend: dict, dry_run: bool) 
     - Parent campaign ACTIVE + had spend > $5 yesterday
     - Ad name does NOT contain 'OFF'
     - Ad currently PAUSED
+    (No campaign-keyword filter — any campaign counts.)
     """
-    # Which campaigns spent > $5 yesterday AND match CC/SCALE/VALUE?
-    # Excludes TESTING and any other campaign types.
+    # Any campaign that spent yesterday qualifies — no keyword filter.
     qualifying_ids = {
         cid for cid, cdata in campaign_spend.items()
         if cdata["spend"] > MIN_YESTERDAY_CAMPAIGN_SPEND_ADS
-        and any(k in cdata["name"].upper().replace("|", " ").split() for k in AD_TARGET_KEYWORDS)
     }
     logger.info(
-        f"AD midnight: {len(qualifying_ids)} CC/SCALE/VALUE campaigns spent > ${MIN_YESTERDAY_CAMPAIGN_SPEND_ADS:.0f} yesterday"
+        f"AD midnight: {len(qualifying_ids)} campaigns spent > ${MIN_YESTERDAY_CAMPAIGN_SPEND_ADS:.0f} yesterday"
     )
     if not qualifying_ids:
         return []
@@ -526,7 +517,7 @@ def build_ad_midnight_slack_message(actions: list[MidnightAdAction], dry_run: bo
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* " + " │ ".join(parts) + "\n"
-            f"_Rule: CC/SCALE/VALUE campaign ACTIVE & yesterday spend > "
+            f"_Rule: campaign ACTIVE & yesterday spend > "
             f"${MIN_YESTERDAY_CAMPAIGN_SPEND_ADS:.0f}; ad PAUSED & name does NOT contain 'OFF'_"
         )}
     })
