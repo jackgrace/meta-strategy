@@ -7,8 +7,10 @@ Rules:
                        (spend>$80 & (ROAS<1.6 OR 0p) & CPA/ATC>$10)]
     restart: PAUSED + spend>$150 & ROAS>=1.6
 - CC ads (today's metrics — kills duds inside healthy adsets):
-    stop:    ACTIVE + spend>$80 & (ROAS<1.8 OR 0p), skip RUN/OFF
-    restart: PAUSED + spend>$80 & ROAS>=1.8 & purchases>0
+    stop:    ACTIVE + [(spend>$80 & (ROAS<1.8 OR 0p)) OR
+                       (spend>$40 & (CPA/ATC>$10 OR 0 ATCs) & (0p OR ROAS<1.8))]
+    restart: PAUSED + neither pause branch fires (full recovery)
+    (skip RUN in ad name / OFF in adset name)
 - TESTING adsets (today's metrics):
     stop:    ACTIVE + spend>$30 & ROAS<1.6
     restart: PAUSED + spend>$30 & ROAS>=1.6
@@ -60,6 +62,11 @@ CC_ADSET_EARLY_CPA_ATC_THRESHOLD = 10.0
 # ad inside a good adset should be pulled fast.
 CC_AD_SPEND_THRESHOLD = 80.0
 CC_AD_ROAS_THRESHOLD = 1.8
+
+# CC ad early-kill: pre-$80 branch for real bad performers.
+# spend > $40 & (CPA/ATC > $10 OR 0 ATCs) & (0p OR ROAS < 1.8) → pause.
+CC_AD_EARLY_SPEND_THRESHOLD = 40.0
+CC_AD_EARLY_CPA_ATC_THRESHOLD = 10.0
 
 # TESTING campaigns — adset-level rule (today's metrics)
 TESTING_ADSET_SPEND_THRESHOLD = 30.0
@@ -513,28 +520,45 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         spend = ad["spend"]
         roas = ad["roas"]
         purchases = ad["purchases"]
+        atcs = ad.get("atcs", 0)
+        cost_per_atc = ad.get("cost_per_atc", 0)
 
-        if spend <= CC_AD_SPEND_THRESHOLD:
+        # Nothing to evaluate below the early gate
+        if spend <= CC_AD_EARLY_SPEND_THRESHOLD:
             continue
 
         adset_data = adset_roas.get(ad["adset_id"], {})
         as_spend = adset_data.get("spend", 0)
         as_roas = adset_data.get("roas", 0)
 
-        # STOP: ACTIVE + spend > $80 + (ROAS < 1.8 OR 0 purchases)
-        if status == "ACTIVE" and (roas < CC_AD_ROAS_THRESHOLD or purchases == 0):
+        # STOP branches (any triggers pause):
+        #   Primary: spend > $80 & (ROAS < 1.8 OR 0p)
+        #   Early:   spend > $40 & (CPA/ATC > $10 OR 0 ATCs) & (0p OR ROAS < 1.8)
+        primary_pause = (
+            spend > CC_AD_SPEND_THRESHOLD
+            and (roas < CC_AD_ROAS_THRESHOLD or purchases == 0)
+        )
+        early_pause = (
+            spend > CC_AD_EARLY_SPEND_THRESHOLD
+            and (cost_per_atc > CC_AD_EARLY_CPA_ATC_THRESHOLD or atcs == 0)
+            and (purchases == 0 or roas < CC_AD_ROAS_THRESHOLD)
+        )
+        if status == "ACTIVE" and (primary_pause or early_pause):
+            branch = "primary" if primary_pause and not early_pause else (
+                "early" if early_pause and not primary_pause else "primary+early"
+            )
             if dry_run:
-                action, reason = "would_pause", "dry run"
+                action, reason = "would_pause", f"dry run ({branch})"
             else:
                 success, reason = _update_ad_status(config, ad_id, "PAUSED")
                 if success:
                     action = "paused"
                     ad_stop += 1
-                    logger.info(f"CC AD STOP: Paused {ad_id} ({current_ad_name}) — spend ${spend:.2f}, ROAS {roas:.2f}, {purchases}p")
+                    logger.info(f"CC AD STOP ({branch}): Paused {ad_id} ({current_ad_name}) — spend ${spend:.2f}, ROAS {roas:.2f}, CPA/ATC ${cost_per_atc:.2f}, {purchases}p / {atcs} ATC")
                 else:
                     action = "failed"
                     ad_fail += 1
-                    logger.warning(f"CC AD STOP: Failed to pause {ad_id}: {reason}")
+                    logger.warning(f"CC AD STOP ({branch}): Failed to pause {ad_id}: {reason}")
 
             actions.append(StopLossAction(
                 ad_id=ad_id, ad_name=current_ad_name,
@@ -545,9 +569,9 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART: PAUSED + spend > $80 + ROAS >= 1.8 + purchases > 0
-        # (mirror of pause — recovers only when ROAS is back AND has purchases)
-        if status == "PAUSED" and roas >= CC_AD_ROAS_THRESHOLD and purchases > 0:
+        # RESTART: PAUSED + spend past early gate + neither pause branch
+        # would currently fire (full recovery — mirror of both pauses).
+        if status == "PAUSED" and not primary_pause and not early_pause:
             if dry_run:
                 action, reason = "would_activate", "dry run"
             else:
@@ -555,7 +579,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 if success:
                     action = "activated"
                     ad_restart += 1
-                    logger.info(f"CC AD RESTART: Activated {ad_id} ({current_ad_name}) — spend ${spend:.2f}, ROAS {roas:.2f}, {purchases}p")
+                    logger.info(f"CC AD RESTART: Activated {ad_id} ({current_ad_name}) — spend ${spend:.2f}, ROAS {roas:.2f}, CPA/ATC ${cost_per_atc:.2f}, {purchases}p / {atcs} ATC")
                 else:
                     action = "failed"
                     ad_fail += 1
@@ -987,8 +1011,9 @@ def build_stop_loss_slack_message(
             f"_CC adset stop: (spend>${CC_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{CC_ADSET_ROAS_THRESHOLD}) OR "
             f"(spend>${CC_ADSET_EARLY_SPEND_THRESHOLD:.0f} & (ROAS<{CC_ADSET_ROAS_THRESHOLD} OR 0p) & CPA/ATC>${CC_ADSET_EARLY_CPA_ATC_THRESHOLD:.0f}) (today, name!contains OFF)_\n"
             f"_CC adset restart: spend>${CC_ADSET_SPEND_THRESHOLD:.0f} & ROAS>={CC_ADSET_ROAS_THRESHOLD}_\n"
-            f"_CC ad stop: spend>${CC_AD_SPEND_THRESHOLD:.0f} & (ROAS<{CC_AD_ROAS_THRESHOLD} OR 0p) (today, skip RUN/OFF)_\n"
-            f"_CC ad restart: spend>${CC_AD_SPEND_THRESHOLD:.0f} & ROAS>={CC_AD_ROAS_THRESHOLD} & purchases>0_\n"
+            f"_CC ad stop: (spend>${CC_AD_SPEND_THRESHOLD:.0f} & (ROAS<{CC_AD_ROAS_THRESHOLD} OR 0p)) OR "
+            f"(spend>${CC_AD_EARLY_SPEND_THRESHOLD:.0f} & (CPA/ATC>${CC_AD_EARLY_CPA_ATC_THRESHOLD:.0f} OR 0 ATCs) & (0p OR ROAS<{CC_AD_ROAS_THRESHOLD})) (today, skip RUN/OFF)_\n"
+            f"_CC ad restart: PAUSED + neither pause branch fires_\n"
             f"_TESTING adset stop: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{TESTING_ADSET_ROAS_THRESHOLD}_\n"
             f"_TESTING adset restart: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS>={TESTING_ADSET_ROAS_THRESHOLD}_\n"
             f"_TESTING ad stop (7d): spend>${TESTING_AD_SPEND_THRESHOLD_7D:.0f} & (ROAS<{TESTING_AD_ROAS_THRESHOLD_7D} OR 0p); cheap-ATC (CPA/ATC<${TESTING_AD_CHEAP_ATC_PROTECT:.0f}) protects until spend>${TESTING_AD_CHEAP_ATC_CEILING:.0f} & 0p; skip RUN_\n"
