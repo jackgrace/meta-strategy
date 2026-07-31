@@ -24,6 +24,10 @@ from midnight_restart import (
     send_midnight_report,
     send_ad_midnight_report,
 )
+from adset_kill_3d import (
+    run_adset_kill_3d as _run_adset_kill_3d,
+    send_adset_kill_report,
+)
 from slack_reporter import send_testing_missed_opps, send_early_fatigue_report
 
 logging.basicConfig(
@@ -169,6 +173,30 @@ def run_midnight_restart() -> dict:
             "ads_activated": sum(1 for a in ad_actions if a.action == "activated"),
             "ads_would_activate": sum(1 for a in ad_actions if a.action == "would_activate"),
             "ads_failed": sum(1 for a in ad_actions if a.action == "failed"),
+        })
+    return {"status": "ok", "mode": mode, "per_account": per_account}
+
+
+def run_adset_kill_3d() -> dict:
+    """Daily: 3d hard-kill for CC/SCALE/VALUE adsets (spend>$200 & ROAS<1.6)."""
+    dry_run = _dry_run()
+    mode = "DRY RUN" if dry_run else "LIVE"
+    per_account = []
+    for config in _per_account_configs():
+        logger.info(f"--- Adset kill 3d: account {config.meta_ad_account_id} ---")
+        try:
+            actions = _run_adset_kill_3d(config, dry_run=dry_run)
+        except Exception as e:
+            logger.error(f"Adset kill 3d failed for {config.meta_ad_account_id}: {e}")
+            per_account.append({"account": config.meta_ad_account_id, "error": str(e)})
+            continue
+        send_adset_kill_report(actions, dry_run, config)
+        per_account.append({
+            "account": config.meta_ad_account_id,
+            "killed": sum(1 for a in actions if a.action == "killed"),
+            "would_kill": sum(1 for a in actions if a.action == "would_kill"),
+            "partial": sum(1 for a in actions if a.action == "partial"),
+            "failed": sum(1 for a in actions if a.action == "failed"),
         })
     return {"status": "ok", "mode": mode, "per_account": per_account}
 
