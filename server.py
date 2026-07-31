@@ -26,7 +26,7 @@ from main import (
     run_stop_loss,
     run_testing_kill,
     run_midnight_restart,
-    run_adset_kill_3d,
+    run_ad_kill_3d,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,8 +55,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._run_testing_kill_endpoint(source="http")
         elif self.path == "/midnight-restart":
             self._run_midnight_restart_endpoint(source="http")
-        elif self.path == "/adset-kill-3d":
-            self._run_adset_kill_3d_endpoint(source="http")
+        elif self.path == "/ad-kill-3d":
+            self._run_ad_kill_3d_endpoint(source="http")
         else:
             self._respond(404, {"error": "not found"})
 
@@ -73,8 +73,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._handle_slack(run_testing_kill, "Running testing kill check now...")
         elif self.path == "/slack/midnight-restart":
             self._handle_slack(run_midnight_restart, "Running midnight restart now...")
-        elif self.path == "/slack/adset-kill-3d":
-            self._handle_slack(run_adset_kill_3d, "Running adset 3d hard-kill now...")
+        elif self.path == "/slack/ad-kill-3d":
+            self._handle_slack(run_ad_kill_3d, "Running ad 3d hard-kill now...")
         elif self.path == "/run":
             self._run_check(source="http")
         elif self.path == "/fatigue":
@@ -151,13 +151,13 @@ class TriggerHandler(BaseHTTPRequestHandler):
             logger.error(f"Midnight restart failed: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
 
-    def _run_adset_kill_3d_endpoint(self, source: str):
-        logger.info(f"Manual trigger via {source} — adset kill 3d")
+    def _run_ad_kill_3d_endpoint(self, source: str):
+        logger.info(f"Manual trigger via {source} — ad kill 3d")
         try:
-            result = run_adset_kill_3d()
+            result = run_ad_kill_3d()
             self._respond(200, result)
         except Exception as e:
-            logger.error(f"Adset kill 3d failed: {e}")
+            logger.error(f"Ad kill 3d failed: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
 
     def _manual_activate(self):
@@ -301,14 +301,14 @@ def _run_daily_scheduler():
             except Exception as e2:
                 logger.error(f"Auto-pause retry also failed: {e2}")
 
-        # 3d hard-kill for CC/SCALE/VALUE adsets — piggybacks the same slot.
+        # 3d hard-kill for CC/SCALE/VALUE ads — piggybacks the same slot.
         # Long-term guard on top of the intra-day stop-loss.
         try:
-            logger.info("Scheduler: running daily adset 3d hard-kill")
-            run_adset_kill_3d()
+            logger.info("Scheduler: running daily ad 3d hard-kill")
+            run_ad_kill_3d()
         except Exception as e:
-            logger.error(f"Scheduled adset-kill-3d failed: {e}")
-            _send_failure_notification(f"adset-kill-3d: {e}")
+            logger.error(f"Scheduled ad-kill-3d failed: {e}")
+            _send_failure_notification(f"ad-kill-3d: {e}")
 
 
 def _send_stop_loss_failure(error_msg: str):
@@ -412,7 +412,7 @@ def start_server():
     logger.info(f"  GET  /stoploss       — intra-day stop-loss")
     logger.info(f"  GET  /testing-kill   — testing campaign kill")
     logger.info(f"  GET  /midnight-restart — reactivate qualifying adsets")
-    logger.info(f"  GET  /adset-kill-3d  — 3d hard-kill for CC/SCALE/VALUE adsets")
+    logger.info(f"  GET  /ad-kill-3d     — 3d hard-kill for CC/SCALE/VALUE ads")
     logger.info(f"  GET  /activate?id=X  — manually reactivate an ad/adset")
     logger.info(f"  POST /slack/trigger  — Slack: all checks")
     logger.info(f"  POST /slack/fatigue  — Slack: fatigue only")
@@ -420,7 +420,7 @@ def start_server():
     logger.info(f"  POST /slack/stoploss — Slack: stop-loss")
     logger.info(f"  POST /slack/testing-kill — Slack: testing kill")
     logger.info(f"  POST /slack/midnight-restart — Slack: midnight restart")
-    logger.info(f"  POST /slack/adset-kill-3d — Slack: 3d hard-kill")
+    logger.info(f"  POST /slack/ad-kill-3d — Slack: 3d hard-kill")
     logger.info(f"  GET  /health         — health check")
     server.serve_forever()
 
