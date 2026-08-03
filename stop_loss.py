@@ -3,8 +3,8 @@ Intra-day stop-loss. Runs every 15 min.
 
 Rules:
 - CC/SCALE/VALUE adsets (today's metrics):
-    stop:    ACTIVE + spend>$500 & ROAS<1.6
-    restart: PAUSED + spend>$500 & ROAS>=1.6
+    stop:    ACTIVE + spend>$300 & ROAS<1.6
+    restart: PAUSED + spend>$300 & ROAS>=1.6
     (skip adsets with OFF in name; no intra-day ad-level rule —
      ad_kill_3d handles ad-level on a 3d rolling window daily)
 - TESTING adsets (today's metrics):
@@ -43,10 +43,10 @@ STOP_CPA_ATC_THRESHOLD = 10.0  # cost per ATC above this — expensive ATCs = pa
 RESTART_ROAS_THRESHOLD = 1.6
 
 # CC/SCALE/VALUE — adset-level rule (today's metrics). Single rule:
-#   Pause:   spend > $500 & ROAS < 1.6
-#   Restart: spend > $500 & ROAS >= 1.6
+#   Pause:   spend > $300 & ROAS < 1.6
+#   Restart: spend > $300 & ROAS >= 1.6
 # Applies to campaigns whose name contains CC, SCALE, or VALUE.
-CVS_ADSET_SPEND_THRESHOLD = 500.0
+CVS_ADSET_SPEND_THRESHOLD = 300.0
 CVS_ADSET_ROAS_THRESHOLD = 1.6
 
 # TESTING campaigns — adset-level rule (today's metrics)
@@ -493,8 +493,8 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
 
     # === CC/SCALE/VALUE adset-level stop-loss / restart (today's metrics) ===
     # Single rule:
-    #   Pause:   ACTIVE + spend > $500 & ROAS < 1.6
-    #   Restart: PAUSED + spend > $500 & ROAS >= 1.6
+    #   Pause:   ACTIVE + spend > $300 & ROAS < 1.6
+    #   Restart: PAUSED + spend > $300 & ROAS >= 1.6
     for adset_id in cvs_adset_ids:
         data = adset_roas.get(adset_id, {})
         spend = data.get("spend", 0)
