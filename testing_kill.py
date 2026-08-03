@@ -9,8 +9,8 @@ PAUSE ad IF:
 - Ad name does NOT contain 'RUN'
 - Ad is currently ACTIVE
 - AND either branch matches:
-    A) DEAD:       30d spend > $30  AND  (0 ATCs OR 0 purchases)
-    B) EFFICIENCY: 30d spend > $30  AND  CPA/ATC < $10  AND  (0 purchases OR ROAS < 1.6)
+    A) DEAD:       30d spend > $50  AND  (0 ATCs OR 0 purchases)
+    B) EFFICIENCY: 30d spend > $50  AND  CPA/ATC < $10  AND  (0 purchases OR ROAS < 1.6)
 """
 
 import logging
@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 
 AEST = timezone(timedelta(hours=10))
 
-DEAD_SPEND_THRESHOLD = 30.0        # spend > $30 & (0 ATCs OR 0 purchases)
-EFFICIENCY_SPEND_THRESHOLD = 30.0  # spend > $30 & CPA/ATC < $10 & (0 purchases OR ROAS < 1.6)
+DEAD_SPEND_THRESHOLD = 50.0        # spend > $50 & (0 ATCs OR 0 purchases)
+EFFICIENCY_SPEND_THRESHOLD = 50.0  # spend > $50 & CPA/ATC < $10 & (0 purchases OR ROAS < 1.6)
 CHEAP_ATC_THRESHOLD = 10.0         # "cheap ATCs" cutoff
 MIN_ROAS_FOR_KILL = 1.6
 

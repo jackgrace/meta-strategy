@@ -8,7 +8,7 @@ Rules:
     (skip adsets with OFF in name; no intra-day ad-level rule —
      ad_kill_3d handles ad-level on a 3d rolling window daily)
 - TESTING adsets (today's metrics):
-    stop:    ACTIVE + spend>$30 & ROAS<1.6
+    stop:    ACTIVE + spend>$30 & ROAS<1.6 & CPA/ATC>$8
     restart: PAUSED + spend>$30 & ROAS>=1.6
 - TESTING ads (rolling 7d, cheap-ATC protected):
     stop:    ACTIVE + spend>$30 & (ROAS<1.6 OR 0p), skip if ATCs>0 & CPA/ATC<$6
@@ -52,6 +52,10 @@ CVS_ADSET_ROAS_THRESHOLD = 1.6
 # TESTING campaigns — adset-level rule (today's metrics)
 TESTING_ADSET_SPEND_THRESHOLD = 30.0
 TESTING_ADSET_ROAS_THRESHOLD = 1.6
+# Pause requires expensive ATCs too — cheap ATCs mean ASC is finding
+# interest even if ROAS is soft; don't nuke that. Restart ignores this
+# (ROAS-only, so a recovered adset comes back regardless of ATC cost).
+TESTING_ADSET_CPA_ATC_PAUSE_THRESHOLD = 8.0
 
 # TESTING campaigns — ad-level rule (rolling 7d metrics)
 TESTING_AD_SPEND_THRESHOLD_7D = 30.0
@@ -592,10 +596,13 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         if "OFF" in current_name.upper():
             continue
 
-        # STOP: ACTIVE + spend > $30 + ROAS < 1.6
+        # STOP: ACTIVE + spend > $30 + ROAS < 1.6 + CPA/ATC > $8
+        # (both ROAS AND CPA/ATC must be bad — cheap-ATC adsets survive
+        # even with soft ROAS, ASC is finding interest there)
         if (status == "ACTIVE"
             and spend > TESTING_ADSET_SPEND_THRESHOLD
-            and roas < TESTING_ADSET_ROAS_THRESHOLD):
+            and roas < TESTING_ADSET_ROAS_THRESHOLD
+            and cost_per_atc > TESTING_ADSET_CPA_ATC_PAUSE_THRESHOLD):
 
             if dry_run:
                 action, reason = "would_pause", "dry run"
@@ -604,7 +611,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 if success:
                     action = "paused"
                     testing_stop += 1
-                    logger.info(f"TESTING ADSET STOP: Paused {adset_id} ({current_name}) — spend ${spend:.2f}, ROAS {roas:.2f}, {purchases} purchases")
+                    logger.info(f"TESTING ADSET STOP: Paused {adset_id} ({current_name}) — spend ${spend:.2f}, ROAS {roas:.2f}, CPA/ATC ${cost_per_atc:.2f}, {purchases}p")
                 else:
                     action = "failed"
                     testing_fail += 1
@@ -891,7 +898,7 @@ def build_stop_loss_slack_message(
             f"*[{mode}]* " + " │ ".join(summary_parts) + "\n"
             f"_CC/SCALE/VALUE adset stop: spend>${CVS_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{CVS_ADSET_ROAS_THRESHOLD} (today, name!contains OFF)_\n"
             f"_CC/SCALE/VALUE adset restart: spend>${CVS_ADSET_SPEND_THRESHOLD:.0f} & ROAS>={CVS_ADSET_ROAS_THRESHOLD}_\n"
-            f"_TESTING adset stop: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{TESTING_ADSET_ROAS_THRESHOLD}_\n"
+            f"_TESTING adset stop: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{TESTING_ADSET_ROAS_THRESHOLD} & CPA/ATC>${TESTING_ADSET_CPA_ATC_PAUSE_THRESHOLD:.0f}_\n"
             f"_TESTING adset restart: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS>={TESTING_ADSET_ROAS_THRESHOLD}_\n"
             f"_TESTING ad stop (7d): spend>${TESTING_AD_SPEND_THRESHOLD_7D:.0f} & (ROAS<{TESTING_AD_ROAS_THRESHOLD_7D} OR 0p); cheap-ATC (CPA/ATC<${TESTING_AD_CHEAP_ATC_PROTECT:.0f}) protects until spend>${TESTING_AD_CHEAP_ATC_CEILING:.0f} & 0p; skip RUN_\n"
             f"_TESTING ad restart (7d): spend>${TESTING_AD_SPEND_THRESHOLD_7D:.0f} & ROAS>={TESTING_AD_ROAS_THRESHOLD_7D} & purchases>0_\n"
