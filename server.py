@@ -301,14 +301,15 @@ def _run_daily_scheduler():
             except Exception as e2:
                 logger.error(f"Auto-pause retry also failed: {e2}")
 
-        # 3d hard-kill for CC/SCALE/VALUE ads — piggybacks the same slot.
-        # Long-term guard on top of the intra-day stop-loss.
-        try:
-            logger.info("Scheduler: running daily ad 3d hard-kill")
-            run_ad_kill_3d()
-        except Exception as e:
-            logger.error(f"Scheduled ad-kill-3d failed: {e}")
-            _send_failure_notification(f"ad-kill-3d: {e}")
+        # 3d hard-kill for CC/SCALE/VALUE ads — DISABLED.
+        # Module + /ad-kill-3d endpoint remain for manual triggering, but
+        # nothing fires automatically. Re-enable by uncommenting below.
+        # try:
+        #     logger.info("Scheduler: running daily ad 3d hard-kill")
+        #     run_ad_kill_3d()
+        # except Exception as e:
+        #     logger.error(f"Scheduled ad-kill-3d failed: {e}")
+        #     _send_failure_notification(f"ad-kill-3d: {e}")
 
 
 def _send_stop_loss_failure(error_msg: str):
