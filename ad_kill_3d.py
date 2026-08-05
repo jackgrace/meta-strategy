@@ -8,7 +8,7 @@ Trigger (per ad, rolling last 3 days):
 - Parent adset name does NOT contain 'OFF'
 - 3d ad spend > $160
 - 3d ad ROAS < 1.6 OR 0 purchases
-- 3d adset ROAS < 1.8   (healthy adsets protect their weak ads)
+- 3d adset ROAS < 1.6   (adset also underperforming)
 
 Action:
 - Pause the ad
@@ -37,7 +37,7 @@ AEST = timezone(timedelta(hours=10))
 
 KILL_SPEND_3D = 160.0
 KILL_ROAS_3D = 1.6
-KILL_ADSET_ROAS_GATE_3D = 1.8
+KILL_ADSET_ROAS_GATE_3D = 1.6
 OFF_SUFFIX = " - OFF"
 CVS_KEYWORDS = {"CC", "SCALE", "VALUE"}
 
