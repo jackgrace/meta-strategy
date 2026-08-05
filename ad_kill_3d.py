@@ -6,8 +6,9 @@ Trigger (per ad, rolling last 3 days):
 - Ad name does NOT contain 'OFF'
 - Ad name does NOT contain 'RUN'  (existing "do not touch" marker)
 - Parent adset name does NOT contain 'OFF'
-- 3d spend > $200
-- 3d ROAS < 1.6
+- 3d ad spend > $160
+- 3d ad ROAS < 1.6 OR 0 purchases
+- 3d adset ROAS < 1.8   (healthy adsets protect their weak ads)
 
 Action:
 - Pause the ad
@@ -21,6 +22,7 @@ Runs once per day (piggybacks the 1am AEST auto-pause slot).
 
 import logging
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 
@@ -33,8 +35,9 @@ logger = logging.getLogger(__name__)
 
 AEST = timezone(timedelta(hours=10))
 
-KILL_SPEND_3D = 200.0
+KILL_SPEND_3D = 160.0
 KILL_ROAS_3D = 1.6
+KILL_ADSET_ROAS_GATE_3D = 1.8
 OFF_SUFFIX = " - OFF"
 CVS_KEYWORDS = {"CC", "SCALE", "VALUE"}
 
@@ -52,6 +55,8 @@ class AdKillAction:
     revenue_3d: float
     roas_3d: float
     purchases_3d: int
+    adset_spend_3d: float
+    adset_roas_3d: float
 
 
 def _http_retry(config: Config, method: str, url: str, **kwargs) -> requests.Response:
@@ -106,7 +111,7 @@ def _fetch_3d_ad_metrics(config: Config) -> dict:
     base_params = {
         "access_token": config.meta_access_token,
         "level": "ad",
-        "fields": "ad_id,ad_name,campaign_name,adset_name,spend,actions,action_values",
+        "fields": "ad_id,ad_name,campaign_name,adset_id,adset_name,spend,actions,action_values",
         "date_preset": "last_3d",
         "limit": 200,
     }
@@ -148,6 +153,7 @@ def _fetch_3d_ad_metrics(config: Config) -> dict:
                 out[row["ad_id"]] = {
                     "ad_name": row.get("ad_name", ""),
                     "campaign_name": campaign_name,
+                    "adset_id": row.get("adset_id", ""),
                     "adset_name": row.get("adset_name", ""),
                     "spend": spend,
                     "revenue": revenue,
@@ -230,6 +236,26 @@ def _pause_and_rename(config: Config, ad_id: str, new_name: str) -> tuple[str, s
     return "killed", "ok"
 
 
+def _aggregate_adset_roas(metrics: dict) -> dict:
+    """Bucket the 3d ad metrics by adset_id, computing spend/revenue/ROAS
+    per adset. Used to gate the ad-kill on the adset's own performance."""
+    buckets = defaultdict(lambda: {"spend": 0.0, "revenue": 0.0})
+    for m in metrics.values():
+        aid = m.get("adset_id")
+        if not aid:
+            continue
+        buckets[aid]["spend"] += m["spend"]
+        buckets[aid]["revenue"] += m["revenue"]
+    return {
+        aid: {
+            "spend": v["spend"],
+            "revenue": v["revenue"],
+            "roas": v["revenue"] / v["spend"] if v["spend"] > 0 else 0.0,
+        }
+        for aid, v in buckets.items()
+    }
+
+
 def run_ad_kill_3d(config: Config, dry_run: bool = False) -> list[AdKillAction]:
     """Once-daily 3d hard-kill for CC/SCALE/VALUE ads."""
     mode = "DRY RUN" if dry_run else "LIVE"
@@ -244,6 +270,7 @@ def run_ad_kill_3d(config: Config, dry_run: bool = False) -> list[AdKillAction]:
     if not metrics:
         return []
 
+    adset_agg = _aggregate_adset_roas(metrics)
     status_map = _fetch_ad_names(config, set(metrics.keys()))
 
     actions: list[AdKillAction] = []
@@ -256,9 +283,20 @@ def run_ad_kill_3d(config: Config, dry_run: bool = False) -> list[AdKillAction]:
         roas = m["roas"]
         purchases = m["purchases"]
 
+        # Ad spend gate
         if spend <= KILL_SPEND_3D:
             continue
-        if roas >= KILL_ROAS_3D:
+
+        # Ad performance: bad ROAS OR no purchases
+        ad_bad = roas < KILL_ROAS_3D or purchases == 0
+        if not ad_bad:
+            continue
+
+        # Adset performance gate — healthy adsets protect their weak ads
+        adset_data = adset_agg.get(m.get("adset_id"), {})
+        as_spend = adset_data.get("spend", 0.0)
+        as_roas = adset_data.get("roas", 0.0)
+        if as_roas >= KILL_ADSET_ROAS_GATE_3D:
             continue
 
         info = status_map.get(ad_id, {})
@@ -276,7 +314,8 @@ def run_ad_kill_3d(config: Config, dry_run: bool = False) -> list[AdKillAction]:
             continue
 
         new_name = current_ad_name.rstrip() + OFF_SUFFIX
-        reason = f"3d spend ${spend:.2f} & ROAS {roas:.2f} < {KILL_ROAS_3D}"
+        bad_desc = "0 purchases" if purchases == 0 else f"ROAS {roas:.2f}<{KILL_ROAS_3D}"
+        reason = f"3d ad spend ${spend:.2f} & {bad_desc} & adset ROAS {as_roas:.2f}<{KILL_ADSET_ROAS_GATE_3D}"
 
         if dry_run:
             actions.append(AdKillAction(
@@ -284,6 +323,7 @@ def run_ad_kill_3d(config: Config, dry_run: bool = False) -> list[AdKillAction]:
                 campaign_name=m["campaign_name"], adset_name=current_adset_name,
                 action="would_kill", reason=reason,
                 spend_3d=spend, revenue_3d=m["revenue"], roas_3d=roas, purchases_3d=purchases,
+                adset_spend_3d=as_spend, adset_roas_3d=as_roas,
             ))
             continue
 
@@ -304,6 +344,7 @@ def run_ad_kill_3d(config: Config, dry_run: bool = False) -> list[AdKillAction]:
             action=action,
             reason=f"{reason} │ {op_reason}" if action != "killed" else reason,
             spend_3d=spend, revenue_3d=m["revenue"], roas_3d=roas, purchases_3d=purchases,
+            adset_spend_3d=as_spend, adset_roas_3d=as_roas,
         ))
 
     logger.info(
@@ -343,7 +384,8 @@ def _build_slack_message(actions: list[AdKillAction], dry_run: bool) -> dict | N
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* " + " │ ".join(parts) + "\n"
-            f"_Rule: CC/SCALE/VALUE ad │ 3d spend>${KILL_SPEND_3D:.0f} & 3d ROAS<{KILL_ROAS_3D}_\n"
+            f"_Rule: CC/SCALE/VALUE ad │ 3d ad spend>${KILL_SPEND_3D:.0f} & "
+            f"(ad ROAS<{KILL_ROAS_3D} OR 0p) & adset ROAS<{KILL_ADSET_ROAS_GATE_3D}_\n"
             f"_Action: pause + append `- OFF` (permanent — manual review to revive)_\n"
             f"3d spend on killed ads: *${total_spend:.2f}*"
         )}
@@ -356,7 +398,8 @@ def _build_slack_message(actions: list[AdKillAction], dry_run: bool) -> dict | N
         return (
             f"{emoji} `{a.old_name}` → `{a.new_name}`\n"
             f"Campaign: `{a.campaign_name}` │ Adset: `{a.adset_name}`\n"
-            f"3d: spend ${a.spend_3d:.2f} │ rev ${a.revenue_3d:.2f} │ ROAS {a.roas_3d:.2f}x │ {a.purchases_3d} purchases\n"
+            f"3d ad: spend ${a.spend_3d:.2f} │ rev ${a.revenue_3d:.2f} │ ROAS {a.roas_3d:.2f}x │ {a.purchases_3d} purchases\n"
+            f"3d adset: spend ${a.adset_spend_3d:.2f} │ ROAS {a.adset_roas_3d:.2f}x\n"
             f"_Why: {a.reason}_"
         )
 
