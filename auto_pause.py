@@ -4,6 +4,11 @@ Auto-pause agent.
 Finds ads that are older than 14 days with less than $20 spend in the
 last 7 days, pauses them, and adds " - OFF" to the name.
 
+Skips any ad whose ad name OR adset name contains 'RUN' — this is a
+manual grace marker for freshly-reactivated adsets whose 7d spend is
+dominated by an OFF period. Remove the RUN marker to re-enable
+auto-pause consideration.
+
 Dry-run by default — set AUTO_PAUSE_ENABLED=true to go live.
 """
 
@@ -101,6 +106,7 @@ def find_pause_candidates(
     candidates = []
     skipped_young = 0
     skipped_off = 0
+    skipped_run = 0
     skipped_paused = 0
     skipped_campaign = 0
 
@@ -144,6 +150,13 @@ def find_pause_candidates(
             skipped_off += 1
             continue
 
+        # Skip if the ad or its adset carries a RUN marker — manual grace
+        # after a reactivation so a just-restarted ad doesn't get killed on
+        # stale 7d spend from the OFF period. User removes RUN when ready.
+        if "RUN" in ad_name.upper() or "RUN" in adset_name.upper():
+            skipped_run += 1
+            continue
+
         # Check ad age
         if not created_time:
             continue
@@ -180,6 +193,7 @@ def find_pause_candidates(
         f"Auto-pause: {len(all_ad_ids)} ads checked │ "
         f"{skipped_paused} already paused │ {skipped_parent_off} parent off │ "
         f"{skipped_campaign} not CC/VALUE/SCALE │ {skipped_off} already OFF │ "
+        f"{skipped_run} RUN marker │ "
         f"{skipped_young} too young (<{MIN_AD_AGE_DAYS}d) │ "
         f"{len(candidates)} candidates (<${SPEND_THRESHOLD} in {LOOKBACK_DAYS}d)"
     )
@@ -261,7 +275,7 @@ def build_pause_slack_message(candidates: list[PauseCandidate], dry_run: bool) -
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* *{len(candidates)} ads* {action_text}\n"
-            f"Rule: CC/VALUE/SCALE campaigns │ created >{MIN_AD_AGE_DAYS} days ago │ <${SPEND_THRESHOLD:.0f} spend in last {LOOKBACK_DAYS} days\n"
+            f"Rule: CC/VALUE/SCALE campaigns │ created >{MIN_AD_AGE_DAYS} days ago │ <${SPEND_THRESHOLD:.0f} spend in last {LOOKBACK_DAYS} days │ ad+adset name!contains RUN\n"
             f"Total 14d spend on flagged ads: *${total_spend:.2f}*"
         )}
     })
