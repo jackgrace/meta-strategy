@@ -2,7 +2,10 @@
 Intra-day stop-loss. Runs every 15 min.
 
 Rules:
-- CC/SCALE/VALUE intra-day: OFF (ad_kill_3d handles ad-level daily)
+- CC/SCALE/VALUE adsets (today's metrics):
+    stop:    ACTIVE + spend>$300 & ROAS<1.8
+    restart: PAUSED + spend>$300 & ROAS>=1.8
+    (skip adsets with OFF in name; no ad-level intra-day rule)
 - TESTING adsets (today's metrics):
     stop:    ACTIVE + spend>$30 & ROAS<1.6 & CPA/ATC>$8
     restart: PAUSED + spend>$30 & ROAS>=1.6
@@ -38,8 +41,12 @@ STOP_CPA_ATC_THRESHOLD = 10.0  # cost per ATC above this — expensive ATCs = pa
 
 RESTART_ROAS_THRESHOLD = 1.6
 
-# CC/SCALE/VALUE intra-day rules (both ad and adset level) are OFF for now.
-# ad_kill_3d.py handles the 3-day hard-kill at ad level (daily 1am AEST).
+# CC/SCALE/VALUE — adset-level rule (today's metrics). Ad-level is off.
+#   Pause:   ACTIVE + spend > $300 & ROAS < 1.8
+#   Restart: PAUSED + spend > $300 & ROAS >= 1.8
+# Applies to campaigns whose name contains CC, SCALE, or VALUE.
+CVS_ADSET_SPEND_THRESHOLD = 300.0
+CVS_ADSET_ROAS_THRESHOLD = 1.8
 
 # TESTING campaigns — adset-level rule (today's metrics)
 TESTING_ADSET_SPEND_THRESHOLD = 30.0
@@ -385,6 +392,15 @@ def _update_ad_status(config: Config, ad_id: str, new_status: str) -> tuple[bool
         return False, str(e)[:100]
 
 
+CVS_KEYWORDS = {"CC", "SCALE", "VALUE"}
+
+
+def _is_cvs_campaign(campaign_name: str) -> bool:
+    """Match campaign name containing CC, SCALE, or VALUE as a whole word."""
+    parts = [p.strip() for p in campaign_name.upper().replace("|", " ").split()]
+    return any(k in parts for k in CVS_KEYWORDS)
+
+
 def _is_testing_campaign(campaign_name: str) -> bool:
     """Match campaign name containing TESTING."""
     return "TESTING" in campaign_name.upper()
@@ -422,7 +438,9 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         logger.error(f"Ad status fetch failed: {e}")
         return [], []
 
-    # Fetch statuses for TESTING and CBO adsets. CVS intra-day is off.
+    # Fetch statuses for CVS, TESTING, and CBO adsets. CBO takes priority
+    # over CVS — a "MIK | CBO | CC" campaign is evaluated by CBO only.
+    cvs_adset_ids: set[str] = set()
     testing_adset_ids: set[str] = set()
     cbo_adset_ids: set[str] = set()
     adset_meta: dict[str, dict] = {}
@@ -436,6 +454,12 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 "adset_name": ad["adset_name"],
                 "campaign_name": campaign_name,
             }
+        elif _is_cvs_campaign(campaign_name):
+            cvs_adset_ids.add(ad["adset_id"])
+            adset_meta[ad["adset_id"]] = {
+                "adset_name": ad["adset_name"],
+                "campaign_name": campaign_name,
+            }
         elif _is_testing_campaign(campaign_name):
             testing_adset_ids.add(ad["adset_id"])
             adset_meta[ad["adset_id"]] = {
@@ -445,7 +469,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
 
     try:
         adset_info = fetch_adset_statuses(
-            config, testing_adset_ids | cbo_adset_ids
+            config, cvs_adset_ids | testing_adset_ids | cbo_adset_ids
         )
     except Exception as e:
         logger.error(f"Adset status fetch failed: {e}")
@@ -465,6 +489,89 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
     for ad in today_ads.values():
         if ad["adset_id"]:
             adset_purchases[ad["adset_id"]] += ad["purchases"]
+
+    # === CC/SCALE/VALUE adset-level stop-loss / restart (today's metrics) ===
+    # Single rule:
+    #   Pause:   ACTIVE + spend > $300 & ROAS < 1.8
+    #   Restart: PAUSED + spend > $300 & ROAS >= 1.8
+    cvs_stop = 0
+    cvs_restart = 0
+    cvs_fail = 0
+
+    for adset_id in cvs_adset_ids:
+        data = adset_roas.get(adset_id, {})
+        spend = data.get("spend", 0)
+        revenue = data.get("revenue", 0)
+        roas = data.get("roas", 0)
+        purchases = adset_purchases.get(adset_id, 0)
+
+        info = adset_info.get(adset_id, {})
+        status = info.get("status", "UNKNOWN")
+        current_name = info.get("name", adset_meta[adset_id]["adset_name"])
+
+        if "OFF" in current_name.upper():
+            continue
+
+        # STOP: ACTIVE + spend > $300 + ROAS < 1.8
+        if (status == "ACTIVE"
+            and spend > CVS_ADSET_SPEND_THRESHOLD
+            and roas < CVS_ADSET_ROAS_THRESHOLD):
+
+            if dry_run:
+                action, reason = "would_pause", "dry run"
+            else:
+                success, reason = _update_ad_status(config, adset_id, "PAUSED")
+                if success:
+                    action = "paused"
+                    cvs_stop += 1
+                    logger.info(f"CVS ADSET STOP: Paused {adset_id} ({current_name}) — spend ${spend:.2f}, ROAS {roas:.2f}, {purchases}p")
+                else:
+                    action = "failed"
+                    cvs_fail += 1
+                    logger.warning(f"CVS ADSET STOP: Failed to pause {adset_id}: {reason}")
+
+            adset_actions.append(AdsetAction(
+                adset_id=adset_id,
+                adset_name=current_name,
+                campaign_name=adset_meta[adset_id]["campaign_name"],
+                action=action,
+                reason=reason,
+                spend=spend,
+                revenue=revenue,
+                roas=roas,
+                purchases=purchases,
+            ))
+            continue
+
+        # RESTART: PAUSED + spend > $300 + ROAS >= 1.8
+        if (status == "PAUSED"
+            and spend > CVS_ADSET_SPEND_THRESHOLD
+            and roas >= CVS_ADSET_ROAS_THRESHOLD):
+
+            if dry_run:
+                action, reason = "would_activate", "dry run"
+            else:
+                success, reason = _update_ad_status(config, adset_id, "ACTIVE")
+                if success:
+                    action = "activated"
+                    cvs_restart += 1
+                    logger.info(f"CVS ADSET RESTART: Activated {adset_id} ({current_name}) — spend ${spend:.2f}, ROAS {roas:.2f}, {purchases}p")
+                else:
+                    action = "failed"
+                    cvs_fail += 1
+                    logger.warning(f"CVS ADSET RESTART: Failed to activate {adset_id}: {reason}")
+
+            adset_actions.append(AdsetAction(
+                adset_id=adset_id,
+                adset_name=current_name,
+                campaign_name=adset_meta[adset_id]["campaign_name"],
+                action=action,
+                reason=reason,
+                spend=spend,
+                revenue=revenue,
+                roas=roas,
+                purchases=purchases,
+            ))
 
     # === TESTING adset-level stop-loss / restart (today's metrics) ===
     testing_stop = 0
@@ -737,6 +844,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
     logger.info(
         f"Stop-loss complete: "
         f"AD (TESTING 7d): {testing_ad_stop} paused, {testing_ad_restart} activated, {testing_ad_fail} failed │ "
+        f"ADSET (CC/SCALE/VALUE): {cvs_stop} paused, {cvs_restart} activated, {cvs_fail} failed │ "
         f"ADSET (TESTING): {testing_stop} paused, {testing_restart} activated, {testing_fail} failed │ "
         f"ADSET (CBO): {cbo_stop} paused, {cbo_restart} activated, {cbo_fail} failed"
     )
@@ -787,7 +895,8 @@ def build_stop_loss_slack_message(
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* " + " │ ".join(summary_parts) + "\n"
-            f"_CC/SCALE/VALUE intra-day: OFF (3d hard-kill runs daily)_\n"
+            f"_CC/SCALE/VALUE adset stop: spend>${CVS_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{CVS_ADSET_ROAS_THRESHOLD} (today, name!contains OFF)_\n"
+            f"_CC/SCALE/VALUE adset restart: spend>${CVS_ADSET_SPEND_THRESHOLD:.0f} & ROAS>={CVS_ADSET_ROAS_THRESHOLD}_\n"
             f"_TESTING adset stop: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{TESTING_ADSET_ROAS_THRESHOLD} & CPA/ATC>${TESTING_ADSET_CPA_ATC_PAUSE_THRESHOLD:.0f}_\n"
             f"_TESTING adset restart: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS>={TESTING_ADSET_ROAS_THRESHOLD}_\n"
             f"_TESTING ad stop (7d): spend>${TESTING_AD_SPEND_THRESHOLD_7D:.0f} & (ROAS<{TESTING_AD_ROAS_THRESHOLD_7D} OR 0p); cheap-ATC (CPA/ATC<${TESTING_AD_CHEAP_ATC_PROTECT:.0f}) protects until spend>${TESTING_AD_CHEAP_ATC_CEILING:.0f} & 0p; skip RUN_\n"
