@@ -2,10 +2,11 @@
 Intra-day stop-loss. Runs every 15 min.
 
 Rules:
-- CC/SCALE/VALUE adsets (today's metrics):
-    stop:    ACTIVE + spend>$300 & ROAS<1.8
-    restart: PAUSED + spend>$300 & ROAS>=1.8
-    (skip adsets with OFF in name; no ad-level intra-day rule)
+- CC/SCALE/VALUE adsets: PAUSED via CVS_ADSET_ENABLED flag.
+    When re-enabled:
+      stop:    ACTIVE + spend>$300 & ROAS<1.8
+      restart: PAUSED + spend>$300 & ROAS>=1.8
+      (skip adsets with OFF in name; no ad-level intra-day rule)
 - TESTING adsets (today's metrics):
     stop:    ACTIVE + spend>$30 & ROAS<1.6 & CPA/ATC>$8
     restart: PAUSED + spend>$30 & ROAS>=1.6
@@ -45,6 +46,8 @@ RESTART_ROAS_THRESHOLD = 1.6
 #   Pause:   ACTIVE + spend > $300 & ROAS < 1.8
 #   Restart: PAUSED + spend > $300 & ROAS >= 1.8
 # Applies to campaigns whose name contains CC, SCALE, or VALUE.
+# Flip CVS_ADSET_ENABLED to False to pause the rule without deleting it.
+CVS_ADSET_ENABLED = False
 CVS_ADSET_SPEND_THRESHOLD = 300.0
 CVS_ADSET_ROAS_THRESHOLD = 1.8
 
@@ -454,7 +457,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 "adset_name": ad["adset_name"],
                 "campaign_name": campaign_name,
             }
-        elif _is_cvs_campaign(campaign_name):
+        elif CVS_ADSET_ENABLED and _is_cvs_campaign(campaign_name):
             cvs_adset_ids.add(ad["adset_id"])
             adset_meta[ad["adset_id"]] = {
                 "adset_name": ad["adset_name"],
@@ -895,8 +898,7 @@ def build_stop_loss_slack_message(
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* " + " │ ".join(summary_parts) + "\n"
-            f"_CC/SCALE/VALUE adset stop: spend>${CVS_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{CVS_ADSET_ROAS_THRESHOLD} (today, name!contains OFF)_\n"
-            f"_CC/SCALE/VALUE adset restart: spend>${CVS_ADSET_SPEND_THRESHOLD:.0f} & ROAS>={CVS_ADSET_ROAS_THRESHOLD}_\n"
+            f"_CC/SCALE/VALUE adset: {'ON — stop spend>$'+str(int(CVS_ADSET_SPEND_THRESHOLD))+' & ROAS<'+str(CVS_ADSET_ROAS_THRESHOLD) if CVS_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_TESTING adset stop: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{TESTING_ADSET_ROAS_THRESHOLD} & CPA/ATC>${TESTING_ADSET_CPA_ATC_PAUSE_THRESHOLD:.0f}_\n"
             f"_TESTING adset restart: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS>={TESTING_ADSET_ROAS_THRESHOLD}_\n"
             f"_TESTING ad stop (7d): spend>${TESTING_AD_SPEND_THRESHOLD_7D:.0f} & (ROAS<{TESTING_AD_ROAS_THRESHOLD_7D} OR 0p); cheap-ATC (CPA/ATC<${TESTING_AD_CHEAP_ATC_PROTECT:.0f}) protects until spend>${TESTING_AD_CHEAP_ATC_CEILING:.0f} & 0p; skip RUN_\n"
