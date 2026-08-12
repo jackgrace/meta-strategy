@@ -1,8 +1,8 @@
 """
 Auto-pause agent.
 
-Finds ads that are older than 14 days with less than $20 spend in the
-last 7 days, pauses them, and adds " - OFF" to the name.
+Finds ads older than MIN_AD_AGE_DAYS with less than $SPEND_THRESHOLD spend
+in the last LOOKBACK_DAYS, pauses them, and adds " - OFF" to the name.
 
 Skips any ad whose ad name OR adset name contains 'RUN' — this is a
 manual grace marker for freshly-reactivated adsets whose 7d spend is
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 AEST = timezone(timedelta(hours=10))
 
-SPEND_THRESHOLD = 15.0
+SPEND_THRESHOLD = 5.0
 LOOKBACK_DAYS = 7
 MIN_AD_AGE_DAYS = 7
 
