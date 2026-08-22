@@ -9,10 +9,9 @@ Rules:
 - TESTING adsets (today's metrics):
     stop:    ACTIVE + spend>$30 & ROAS<1.6 & CPA/ATC>$8
     restart: PAUSED + spend>$30 & ROAS>=1.6
-- TESTING ads (rolling 7d, cheap-ATC protected):
-    stop:    ACTIVE + spend>$30 & (ROAS<1.6 OR 0p), skip if ATCs>0 & CPA/ATC<$6
-             (protection expires at spend>$50 & 0p)
-    restart: PAUSED + spend>$30 & ROAS>=1.6 & purchases>0
+- TESTING ads (rolling 7d): DISABLED via TESTING_AD_7D_ENABLED flag.
+    (Kept for quick re-enable — was: spend>$30 & (ROAS<1.6 OR 0p) with
+     cheap-ATC protection expiring at spend>$50 & 0p.)
 - CBO adsets (today's metrics):
     stop:    ACTIVE + spend>$100 & ROAS<1.6
     restart: PAUSED + spend>$100 & ROAS>1.6
@@ -59,6 +58,8 @@ TESTING_ADSET_ROAS_THRESHOLD = 1.6
 TESTING_ADSET_CPA_ATC_PAUSE_THRESHOLD = 8.0
 
 # TESTING campaigns — ad-level rule (rolling 7d metrics)
+# Flip TESTING_AD_7D_ENABLED to True to re-enable.
+TESTING_AD_7D_ENABLED = False
 TESTING_AD_SPEND_THRESHOLD_7D = 30.0
 TESTING_AD_ROAS_THRESHOLD_7D = 1.6
 # Protect: if the audience is adding to cart cheaply, keep the ad running
@@ -746,10 +747,13 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
     testing_ad_restart = 0
     testing_ad_fail = 0
 
-    try:
-        testing_7d = _fetch_testing_ads_7d(config)
-    except Exception as e:
-        logger.error(f"TESTING 7d fetch failed: {e}")
+    if TESTING_AD_7D_ENABLED:
+        try:
+            testing_7d = _fetch_testing_ads_7d(config)
+        except Exception as e:
+            logger.error(f"TESTING 7d fetch failed: {e}")
+            testing_7d = {}
+    else:
         testing_7d = {}
 
     if testing_7d:
@@ -900,8 +904,7 @@ def build_stop_loss_slack_message(
             f"_CC/SCALE/VALUE adset: {'ON — stop spend>$'+str(int(CVS_ADSET_SPEND_THRESHOLD))+' & ROAS<'+str(CVS_ADSET_ROAS_THRESHOLD) if CVS_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_TESTING adset stop: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{TESTING_ADSET_ROAS_THRESHOLD} & CPA/ATC>${TESTING_ADSET_CPA_ATC_PAUSE_THRESHOLD:.0f}_\n"
             f"_TESTING adset restart: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS>={TESTING_ADSET_ROAS_THRESHOLD}_\n"
-            f"_TESTING ad stop (7d): spend>${TESTING_AD_SPEND_THRESHOLD_7D:.0f} & (ROAS<{TESTING_AD_ROAS_THRESHOLD_7D} OR 0p); cheap-ATC (CPA/ATC<${TESTING_AD_CHEAP_ATC_PROTECT:.0f}) protects until spend>${TESTING_AD_CHEAP_ATC_CEILING:.0f} & 0p; skip RUN_\n"
-            f"_TESTING ad restart (7d): spend>${TESTING_AD_SPEND_THRESHOLD_7D:.0f} & ROAS>={TESTING_AD_ROAS_THRESHOLD_7D} & purchases>0_\n"
+            f"_TESTING ad (7d): {'ON' if TESTING_AD_7D_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_CBO adset stop: spend>${CBO_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{CBO_ADSET_ROAS_THRESHOLD}_\n"
             f"_CBO adset restart: spend>${CBO_ADSET_SPEND_THRESHOLD:.0f} & ROAS>{CBO_ADSET_ROAS_THRESHOLD}_"
         )}
