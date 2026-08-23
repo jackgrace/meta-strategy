@@ -2,8 +2,10 @@
 Intra-day stop-loss. Runs every 15 min.
 
 Rules:
-- CC/SCALE/VALUE adsets: DISABLED via CVS_ADSET_ENABLED flag.
-    (When on: pause ACTIVE + spend>$300 & ROAS<1.6, mirror restart.)
+- CC/SCALE/VALUE adsets (today's metrics):
+    stop:    ACTIVE + spend>$300 & ROAS<1.5
+    restart: PAUSED + spend>$300 & ROAS>=1.5
+    (skip adsets with OFF in name; no ad-level intra-day rule)
 - TESTING adsets (today's metrics):
     stop:    ACTIVE + spend>$30 & ROAS<1.6 & CPA/ATC>$8
     restart: PAUSED + spend>$30 & ROAS>=1.6
@@ -39,13 +41,13 @@ STOP_CPA_ATC_THRESHOLD = 10.0  # cost per ATC above this — expensive ATCs = pa
 RESTART_ROAS_THRESHOLD = 1.6
 
 # CC/SCALE/VALUE — adset-level rule (today's metrics). Ad-level is off.
-#   Pause:   ACTIVE + spend > $300 & ROAS < 1.6
-#   Restart: PAUSED + spend > $300 & ROAS >= 1.6
+#   Pause:   ACTIVE + spend > $300 & ROAS < 1.5
+#   Restart: PAUSED + spend > $300 & ROAS >= 1.5
 # Applies to campaigns whose name contains CC, SCALE, or VALUE.
 # Flip CVS_ADSET_ENABLED to False to pause the rule without deleting it.
-CVS_ADSET_ENABLED = False
+CVS_ADSET_ENABLED = True
 CVS_ADSET_SPEND_THRESHOLD = 300.0
-CVS_ADSET_ROAS_THRESHOLD = 1.6
+CVS_ADSET_ROAS_THRESHOLD = 1.5
 
 # TESTING campaigns — adset-level rule (today's metrics)
 TESTING_ADSET_SPEND_THRESHOLD = 30.0
