@@ -4,9 +4,9 @@ Intra-day stop-loss. Runs every 15 min.
 Rules:
 - CC/SCALE/VALUE adsets: DISABLED via CVS_ADSET_ENABLED flag.
     (When on: pause ACTIVE + spend>$300 & ROAS<1.5, mirror restart.)
-- TESTING adsets (today's metrics):
-    stop:    ACTIVE + spend>$30 & ROAS<1.6 & CPA/ATC>$8
-    restart: PAUSED + spend>$30 & ROAS>=1.6
+- TESTING adsets: DISABLED via TESTING_ADSET_ENABLED flag.
+    (When on: pause ACTIVE + spend>$30 & ROAS<1.6 & CPA/ATC>$8,
+     restart PAUSED + spend>$30 & ROAS>=1.6.)
 - TESTING ads (rolling 7d): DISABLED via TESTING_AD_7D_ENABLED flag.
     (Kept for quick re-enable — was: spend>$30 & (ROAS<1.6 OR 0p) with
      cheap-ATC protection expiring at spend>$50 & 0p.)
@@ -48,6 +48,8 @@ CVS_ADSET_SPEND_THRESHOLD = 300.0
 CVS_ADSET_ROAS_THRESHOLD = 1.5
 
 # TESTING campaigns — adset-level rule (today's metrics)
+# Flip TESTING_ADSET_ENABLED to True to re-enable.
+TESTING_ADSET_ENABLED = False
 TESTING_ADSET_SPEND_THRESHOLD = 30.0
 TESTING_ADSET_ROAS_THRESHOLD = 1.6
 # Pause requires expensive ATCs too — cheap ATCs mean ASC is finding
@@ -461,7 +463,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 "adset_name": ad["adset_name"],
                 "campaign_name": campaign_name,
             }
-        elif _is_testing_campaign(campaign_name):
+        elif TESTING_ADSET_ENABLED and _is_testing_campaign(campaign_name):
             testing_adset_ids.add(ad["adset_id"])
             adset_meta[ad["adset_id"]] = {
                 "adset_name": ad["adset_name"],
@@ -900,8 +902,7 @@ def build_stop_loss_slack_message(
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* " + " │ ".join(summary_parts) + "\n"
             f"_CC/SCALE/VALUE adset: {'ON — stop spend>$'+str(int(CVS_ADSET_SPEND_THRESHOLD))+' & ROAS<'+str(CVS_ADSET_ROAS_THRESHOLD) if CVS_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
-            f"_TESTING adset stop: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{TESTING_ADSET_ROAS_THRESHOLD} & CPA/ATC>${TESTING_ADSET_CPA_ATC_PAUSE_THRESHOLD:.0f}_\n"
-            f"_TESTING adset restart: spend>${TESTING_ADSET_SPEND_THRESHOLD:.0f} & ROAS>={TESTING_ADSET_ROAS_THRESHOLD}_\n"
+            f"_TESTING adset: {'ON — stop spend>$'+str(int(TESTING_ADSET_SPEND_THRESHOLD))+' & ROAS<'+str(TESTING_ADSET_ROAS_THRESHOLD)+' & CPA/ATC>$'+str(int(TESTING_ADSET_CPA_ATC_PAUSE_THRESHOLD)) if TESTING_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_TESTING ad (7d): {'ON' if TESTING_AD_7D_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_CBO adset stop: spend>${CBO_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{CBO_ADSET_ROAS_THRESHOLD}_\n"
             f"_CBO adset restart: spend>${CBO_ADSET_SPEND_THRESHOLD:.0f} & ROAS>{CBO_ADSET_ROAS_THRESHOLD}_"
