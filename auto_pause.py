@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 
 AEST = timezone(timedelta(hours=10))
 
+# Flip AUTO_PAUSE_RULE_ENABLED to True to re-enable the daily low-spend kill.
+AUTO_PAUSE_RULE_ENABLED = False
 SPEND_THRESHOLD = 5.0
 LOOKBACK_DAYS = 7
 MIN_AD_AGE_DAYS = 7
@@ -98,6 +100,10 @@ def find_pause_candidates(
     config: Config,
 ) -> list[PauseCandidate]:
     """Find ads created >14 days ago with <$20 spend in last 14 days."""
+
+    if not AUTO_PAUSE_RULE_ENABLED:
+        logger.info("Auto-pause: DISABLED via AUTO_PAUSE_RULE_ENABLED flag — skipping")
+        return []
 
     # Lightweight fetch: aggregate 14d spend per ad (no daily breakdown)
     ad_spend = _fetch_14d_spend(config)
