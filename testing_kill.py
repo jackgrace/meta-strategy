@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 AEST = timezone(timedelta(hours=10))
 
+# Flip TESTING_KILL_ENABLED to True to re-enable the hourly 30d kill.
+TESTING_KILL_ENABLED = False
 DEAD_SPEND_THRESHOLD = 50.0        # spend > $50 & (0 ATCs OR 0 purchases)
 EFFICIENCY_SPEND_THRESHOLD = 50.0  # spend > $50 & CPA/ATC < $10 & (0 purchases OR ROAS < 1.6)
 CHEAP_ATC_THRESHOLD = 10.0         # "cheap ATCs" cutoff
@@ -197,6 +199,10 @@ def run_testing_kill(config: Config, dry_run: bool = False) -> list[TestingKillA
     """Evaluate TESTING campaigns and pause underperformers."""
     mode = "DRY RUN" if dry_run else "LIVE"
     logger.info(f"=== Testing kill check [{mode}] ===")
+
+    if not TESTING_KILL_ENABLED:
+        logger.info("Testing kill: DISABLED via TESTING_KILL_ENABLED flag — skipping")
+        return []
 
     lifetime = _fetch_lifetime_insights(config)
     if not lifetime:
