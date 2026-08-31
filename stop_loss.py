@@ -7,8 +7,8 @@ Rules:
     restart: PAUSED + spend>$1000 & ROAS>=1.4 (intra-day if ROAS improves)
     (skip adsets with OFF in name; midnight is the primary recovery path)
 - TESTING adsets (today's metrics):
-    stop:    ACTIVE + spend>$30 & ROAS<1.6 & CPA/ATC>$8
-    restart: PAUSED + spend>$30 & ROAS>=1.6
+    stop:    ACTIVE + spend>$150 & ROAS<1.6 & CPA/ATC>$8
+    restart: PAUSED + spend>$150 & ROAS>=1.6
 - TESTING ads (rolling 7d): DISABLED via TESTING_AD_7D_ENABLED flag.
     (Kept for quick re-enable — was: spend>$30 & (ROAS<1.6 OR 0p) with
      cheap-ATC protection expiring at spend>$50 & 0p.)
@@ -52,7 +52,7 @@ SCALE_ADSET_ROAS_THRESHOLD = 1.4
 # TESTING campaigns — adset-level rule (today's metrics)
 # Flip TESTING_ADSET_ENABLED to True to re-enable.
 TESTING_ADSET_ENABLED = True
-TESTING_ADSET_SPEND_THRESHOLD = 30.0
+TESTING_ADSET_SPEND_THRESHOLD = 150.0
 TESTING_ADSET_ROAS_THRESHOLD = 1.6
 # Pause requires expensive ATCs too — cheap ATCs mean ASC is finding
 # interest even if ROAS is soft; don't nuke that. Restart ignores this
