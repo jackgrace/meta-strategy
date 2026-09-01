@@ -6,9 +6,11 @@ Runs daily at 12:05am AEST.
 ADSET rule — turn ON adset IF:
 - Parent campaign is ACTIVE
 - Parent campaign had spend > $1 yesterday
+  OR campaign name matches an ADSET_RESTART_BYPASS_KEYWORD_GROUPS
+  entry (e.g. SCALE+VALUE campaigns bypass the spend gate so their
+  adsets can wake even after a $0 day)
 - Adset name does NOT contain 'OFF'
 - Adset is currently PAUSED
-(No campaign-keyword filter — any campaign counts.)
 
 AD rule — turn ON ad IF:
 - Parent campaign is ACTIVE
@@ -34,6 +36,15 @@ AEST = timezone(timedelta(hours=10))
 
 MIN_YESTERDAY_CAMPAIGN_SPEND = 1.0            # adset rule
 MIN_YESTERDAY_CAMPAIGN_SPEND_ADS = 5.0        # ad rule
+
+# Campaigns whose name matches ALL keywords in any tuple below bypass the
+# "spent > $1 yesterday" gate — their adsets can still restart at midnight
+# even if the campaign had $0 impressions yesterday. Whole-word match.
+# Example: ("SCALE", "VALUE") matches "SCALE | US | VALUE" and
+# "SCALE | VALUE | AU" but not "SCALE | US" or "VALUE | US".
+ADSET_RESTART_BYPASS_KEYWORD_GROUPS: list[tuple[str, ...]] = [
+    ("SCALE", "VALUE"),
+]
 
 
 @dataclass
@@ -161,6 +172,40 @@ def _fetch_campaign_statuses(config: Config, campaign_ids: set[str]) -> dict:
     return statuses
 
 
+def _fetch_bypass_campaigns(config: Config) -> dict:
+    """Fetch all account campaigns whose name matches any keyword group in
+    ADSET_RESTART_BYPASS_KEYWORD_GROUPS. Returns
+    {campaign_id: {name, effective_status}} for the matching campaigns.
+    Only these bypass the "spent yesterday" gate for adset midnight restart."""
+    if not ADSET_RESTART_BYPASS_KEYWORD_GROUPS:
+        return {}
+
+    out: dict = {}
+    url = f"{API_BASE}/{config.meta_ad_account_id}/campaigns"
+    params = {
+        "access_token": config.meta_access_token,
+        "fields": "id,name,effective_status",
+        "limit": 500,
+    }
+    while url:
+        data = _http_get_json(config, url, params)
+        for row in data.get("data", []):
+            name_upper = row.get("name", "").upper()
+            name_parts = [p.strip() for p in name_upper.replace("|", " ").split()]
+            for group in ADSET_RESTART_BYPASS_KEYWORD_GROUPS:
+                if all(k.upper() in name_parts for k in group):
+                    out[row["id"]] = {
+                        "name": row.get("name", ""),
+                        "effective_status": row.get("effective_status", "UNKNOWN"),
+                    }
+                    break
+        paging = data.get("paging", {})
+        url = paging.get("next")
+        params = None
+    logger.info(f"Midnight restart: {len(out)} campaigns match bypass keyword groups")
+    return out
+
+
 def _fetch_paused_adsets(config: Config) -> list[dict]:
     """
     Fetch all PAUSED adsets in the account.
@@ -268,7 +313,7 @@ def run_midnight_restart(config: Config, dry_run: bool = False) -> tuple[list[Mi
     # Step 1: yesterday's spend per campaign
     campaign_spend = _fetch_yesterday_campaign_spend(config)
 
-    # Step 2: filter to campaigns matching keywords + spend > $1 yesterday
+    # Step 2: filter to campaigns matching keywords + spend > $1 yesterday.
     # Any campaign that spent yesterday qualifies — no keyword filter.
     # We only need the parent to be active and to have had spend, so we
     # don't wake up dead campaigns; the OFF-in-adset-name check does the
@@ -278,9 +323,16 @@ def run_midnight_restart(config: Config, dry_run: bool = False) -> tuple[list[Mi
         if cdata["spend"] > MIN_YESTERDAY_CAMPAIGN_SPEND:
             qualifying_campaign_ids.add(cid)
 
+    # Bypass: campaigns matching a bypass keyword group qualify regardless
+    # of yesterday spend (for e.g. a paused-yesterday scaling campaign that
+    # needs its adsets to wake up now).
+    bypass_map = _fetch_bypass_campaigns(config)
+    for cid in bypass_map:
+        qualifying_campaign_ids.add(cid)
+
     logger.info(
         f"{len(qualifying_campaign_ids)} campaigns qualify "
-        f"(spend > ${MIN_YESTERDAY_CAMPAIGN_SPEND:.0f} yesterday)"
+        f"(spend > ${MIN_YESTERDAY_CAMPAIGN_SPEND:.0f} yesterday OR bypass keyword match)"
     )
 
     if not qualifying_campaign_ids:
