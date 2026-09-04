@@ -336,7 +336,8 @@ def run_midnight_restart(config: Config, dry_run: bool = False) -> tuple[list[Mi
     )
 
     if not qualifying_campaign_ids:
-        return []
+        # Still run the ad-level pass — it fetches its own qualifying set.
+        return [], _run_ad_level_midnight(config, campaign_spend, dry_run)
 
     # Step 3: confirm current campaign statuses (must be ACTIVE right now)
     campaign_statuses = _fetch_campaign_statuses(config, qualifying_campaign_ids)
@@ -347,7 +348,7 @@ def run_midnight_restart(config: Config, dry_run: bool = False) -> tuple[list[Mi
     logger.info(f"{len(active_campaign_ids)} of those campaigns are currently ACTIVE")
 
     if not active_campaign_ids:
-        return []
+        return [], _run_ad_level_midnight(config, campaign_spend, dry_run)
 
     # Step 4: fetch PAUSED adsets, filter to qualifying campaigns and no OFF
     paused_adsets = _fetch_paused_adsets(config)
