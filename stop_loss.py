@@ -3,8 +3,8 @@ Intra-day stop-loss. Runs every 15 min.
 
 Rules:
 - SCALE adsets (today's metrics):
-    stop:    ACTIVE + spend>$1000 & ROAS<1.4
-    restart: PAUSED + spend>$1000 & ROAS>=1.4 (intra-day if ROAS improves)
+    stop:    ACTIVE + spend>$300 & ROAS<1.6
+    restart: PAUSED + spend>$300 & ROAS>=1.6 (intra-day if ROAS improves)
     (skip adsets with OFF in name; midnight is the primary recovery path)
 - TESTING adsets (today's metrics, spend threshold tiered on daily budget):
     tier:    daily_budget<$60 → threshold $30; daily_budget>=$60 → threshold $60
@@ -43,13 +43,13 @@ STOP_CPA_ATC_THRESHOLD = 10.0  # cost per ATC above this — expensive ATCs = pa
 RESTART_ROAS_THRESHOLD = 1.6
 
 # SCALE — adset-level rule (today's metrics). Ad-level is off.
-#   Pause:   ACTIVE + spend > $1000 & ROAS < 1.4
-#   Restart: PAUSED + spend > $1000 & ROAS >= 1.4
+#   Pause:   ACTIVE + spend > $300 & ROAS < 1.6
+#   Restart: PAUSED + spend > $300 & ROAS >= 1.6
 # Matches campaigns whose name contains SCALE as a whole word only.
 # Flip SCALE_ADSET_ENABLED to False to pause the rule without deleting it.
 SCALE_ADSET_ENABLED = True
-SCALE_ADSET_SPEND_THRESHOLD = 1000.0
-SCALE_ADSET_ROAS_THRESHOLD = 1.4
+SCALE_ADSET_SPEND_THRESHOLD = 300.0
+SCALE_ADSET_ROAS_THRESHOLD = 1.6
 
 # TESTING campaigns — adset-level rule (today's metrics)
 # Flip TESTING_ADSET_ENABLED to True to re-enable.
@@ -502,8 +502,8 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
 
     # === SCALE adset-level stop-loss / restart (today's metrics) ===
     # Single rule:
-    #   Pause:   ACTIVE + spend > $1000 & ROAS < 1.4
-    #   Restart: PAUSED + spend > $1000 & ROAS >= 1.4
+    #   Pause:   ACTIVE + spend > $300 & ROAS < 1.6
+    #   Restart: PAUSED + spend > $300 & ROAS >= 1.6
     scale_stop = 0
     scale_restart = 0
     scale_fail = 0
