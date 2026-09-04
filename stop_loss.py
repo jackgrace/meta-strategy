@@ -12,7 +12,7 @@ Rules:
     restart: PAUSED + spend>threshold & ROAS>=1.6
 - TESTING ads (rolling 7d, cheap-ATC protected):
     stop:    ACTIVE + spend>$30 & (ROAS<1.6 OR 0p), skip if ATCs>0 & CPA/ATC<$6
-             (protection expires at spend>$50 & 0p)
+             (protection expires at spend>$100 & 0p)
     restart: PAUSED + spend>$30 & ROAS>=1.6 & purchases>0
 - CBO adsets (today's metrics):
     stop:    ACTIVE + spend>$100 & ROAS<1.6
@@ -78,7 +78,7 @@ TESTING_AD_CHEAP_ATC_PROTECT = 6.0
 # Hard ceiling: the cheap-ATC protection expires at this spend if still
 # 0 purchases — engagement without conversion for this long isn't a
 # funnel-warming signal, it's a broken funnel.
-TESTING_AD_CHEAP_ATC_CEILING = 50.0
+TESTING_AD_CHEAP_ATC_CEILING = 100.0
 
 # CBO campaigns — adset-level rule (today's metrics)
 CBO_ADSET_SPEND_THRESHOLD = 100.0
