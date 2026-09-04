@@ -336,7 +336,7 @@ def fetch_adset_statuses(config: Config, adset_ids: set[str]) -> dict[str, dict]
         params = {
             "access_token": config.meta_access_token,
             "ids": ",".join(batch),
-            "fields": "effective_status,name",
+            "fields": "effective_status,name,daily_budget",
         }
 
         resp = None
@@ -358,9 +358,18 @@ def fetch_adset_statuses(config: Config, adset_ids: set[str]) -> dict[str, dict]
 
         data = resp.json()
         for adset_id, adset_data in data.items():
+            # daily_budget from Meta is a string in the account currency's
+            # minor units (cents). Convert to major-unit dollars for callers;
+            # 0.0 means adset has no daily_budget (CBO or lifetime budget).
+            raw_daily = adset_data.get("daily_budget")
+            try:
+                daily_dollars = float(raw_daily) / 100.0 if raw_daily else 0.0
+            except (TypeError, ValueError):
+                daily_dollars = 0.0
             statuses[adset_id] = {
                 "status": adset_data.get("effective_status", "UNKNOWN"),
                 "name": adset_data.get("name", "Unknown"),
+                "daily_budget_dollars": daily_dollars,
             }
 
     logger.info(f"Fetched adset info for {len(statuses)} adsets")
