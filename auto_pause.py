@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 AEST = timezone(timedelta(hours=10))
 
 # Flip AUTO_PAUSE_RULE_ENABLED to True to re-enable the daily low-spend kill.
-AUTO_PAUSE_RULE_ENABLED = False
+AUTO_PAUSE_RULE_ENABLED = True
 SPEND_THRESHOLD = 5.0
 LOOKBACK_DAYS = 7
 MIN_AD_AGE_DAYS = 7
@@ -145,9 +145,9 @@ def find_pause_candidates(
         campaign_name = spend_data.get("campaign_name") or info.get("campaign_name", "Unknown")
         adset_name = spend_data.get("adset_name") or info.get("adset_name", "Unknown")
 
-        # Only check target campaigns (CC, VALUE, or SCALE, whole word)
+        # Only check SCALE campaigns (whole word).
         campaign_parts = [p.strip() for p in campaign_name.upper().replace("|", " ").split()]
-        if not any(k in campaign_parts for k in ("CC", "VALUE", "SCALE")):
+        if "SCALE" not in campaign_parts:
             skipped_campaign += 1
             continue
 
@@ -198,7 +198,7 @@ def find_pause_candidates(
     logger.info(
         f"Auto-pause: {len(all_ad_ids)} ads checked │ "
         f"{skipped_paused} already paused │ {skipped_parent_off} parent off │ "
-        f"{skipped_campaign} not CC/VALUE/SCALE │ {skipped_off} already OFF │ "
+        f"{skipped_campaign} not SCALE │ {skipped_off} already OFF │ "
         f"{skipped_run} RUN marker │ "
         f"{skipped_young} too young (<{MIN_AD_AGE_DAYS}d) │ "
         f"{len(candidates)} candidates (<${SPEND_THRESHOLD} in {LOOKBACK_DAYS}d)"
@@ -281,7 +281,7 @@ def build_pause_slack_message(candidates: list[PauseCandidate], dry_run: bool) -
         "type": "section",
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* *{len(candidates)} ads* {action_text}\n"
-            f"Rule: CC/VALUE/SCALE campaigns │ created >{MIN_AD_AGE_DAYS} days ago │ <${SPEND_THRESHOLD:.0f} spend in last {LOOKBACK_DAYS} days │ ad+adset name!contains RUN\n"
+            f"Rule: SCALE campaigns │ created >{MIN_AD_AGE_DAYS} days ago │ <${SPEND_THRESHOLD:.0f} spend in last {LOOKBACK_DAYS} days │ ad+adset name!contains RUN\n"
             f"Total 14d spend on flagged ads: *${total_spend:.2f}*"
         )}
     })
