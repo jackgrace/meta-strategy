@@ -49,6 +49,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._test_pause(source="http")
         elif self.path.startswith("/activate"):
             self._manual_activate()
+        elif self.path.startswith("/set-adset-roas"):
+            self._set_adset_roas()
         elif self.path == "/stoploss":
             self._run_stop_loss_endpoint(source="http")
         elif self.path == "/testing-kill":
@@ -158,6 +160,75 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(200, result)
         except Exception as e:
             logger.error(f"Ad kill 3d failed: {e}")
+            self._respond(500, {"status": "error", "message": str(e)})
+
+    def _set_adset_roas(self):
+        """Set the min-ROAS bid target on an adset:
+        /set-adset-roas?id=<adset_id>&roas=1.9
+
+        Sends bid_strategy=LOWEST_COST_WITH_MIN_ROAS + bid_amount=roas*10000
+        (Meta's basis-point encoding: 10000 = 1.0x). Guarded to
+        1.2 <= roas <= 5.0 to prevent typo damage.
+        """
+        from urllib.parse import urlparse, parse_qs
+        from meta_api import API_BASE
+        from config import Config
+
+        qs = parse_qs(urlparse(self.path).query)
+        adset_id = (qs.get("id") or qs.get("adset_id") or [""])[0].strip()
+        roas_str = (qs.get("roas") or [""])[0].strip()
+
+        if not adset_id or not roas_str:
+            self._respond(400, {"error": "missing params — expected ?id=<adset_id>&roas=1.8"})
+            return
+
+        try:
+            roas = float(roas_str)
+        except ValueError:
+            self._respond(400, {"error": f"invalid roas value: {roas_str!r}"})
+            return
+
+        if not (1.2 <= roas <= 5.0):
+            self._respond(400, {"error": f"roas {roas} out of safe bounds (1.2–5.0)"})
+            return
+
+        bid_amount = int(round(roas * 10000))
+        logger.info(f"Manual ROAS target: adset {adset_id} → {roas}x (bid_amount={bid_amount})")
+
+        try:
+            config = Config.from_env()
+            resp = requests.post(
+                f"{API_BASE}/{adset_id}?access_token={config.meta_access_token}",
+                data={
+                    "bid_strategy": "LOWEST_COST_WITH_MIN_ROAS",
+                    "bid_amount": str(bid_amount),
+                },
+                timeout=60,
+            )
+            if resp.ok:
+                logger.info(f"ROAS target set: {adset_id} → {roas}x")
+                self._respond(200, {
+                    "status": "ok",
+                    "adset_id": adset_id,
+                    "roas_target": roas,
+                    "bid_amount": bid_amount,
+                    "bid_strategy": "LOWEST_COST_WITH_MIN_ROAS",
+                })
+            else:
+                try:
+                    err = resp.json().get("error", {})
+                    reason = err.get("error_user_title", err.get("message", "Unknown"))
+                except Exception:
+                    reason = f"HTTP {resp.status_code}"
+                logger.error(f"Failed to set ROAS target on {adset_id}: {reason}")
+                self._respond(resp.status_code, {
+                    "status": "error",
+                    "adset_id": adset_id,
+                    "reason": reason,
+                    "body": resp.text[:500],
+                })
+        except Exception as e:
+            logger.error(f"set-adset-roas error: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
 
     def _manual_activate(self):
@@ -415,6 +486,7 @@ def start_server():
     logger.info(f"  GET  /midnight-restart — reactivate qualifying adsets")
     logger.info(f"  GET  /ad-kill-3d     — 3d hard-kill for CC/SCALE/VALUE ads")
     logger.info(f"  GET  /activate?id=X  — manually reactivate an ad/adset")
+    logger.info(f"  GET  /set-adset-roas?id=X&roas=1.8 — set min-ROAS bid target")
     logger.info(f"  POST /slack/trigger  — Slack: all checks")
     logger.info(f"  POST /slack/fatigue  — Slack: fatigue only")
     logger.info(f"  POST /slack/pause    — Slack: auto-pause")
