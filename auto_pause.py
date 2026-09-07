@@ -29,7 +29,7 @@ AEST = timezone(timedelta(hours=10))
 # Flip AUTO_PAUSE_RULE_ENABLED to True to re-enable the daily low-spend kill.
 AUTO_PAUSE_RULE_ENABLED = True
 SPEND_THRESHOLD = 5.0
-LOOKBACK_DAYS = 7
+LOOKBACK_DAYS = 14
 MIN_AD_AGE_DAYS = 7
 
 
@@ -49,9 +49,9 @@ class PauseCandidate:
     action_taken: str  # "would_pause" (dry run) or "paused" (live)
 
 
-def _fetch_14d_spend(config: Config) -> dict[str, dict]:
+def _fetch_lookback_spend(config: Config) -> dict[str, dict]:
     """
-    Lightweight API call: fetch aggregate 14-day spend per ad.
+    Lightweight API call: fetch aggregate LOOKBACK_DAYS spend per ad.
     No daily breakdown — returns one row per ad with total spend.
     Much faster than the full insights fetch.
     """
@@ -106,7 +106,7 @@ def find_pause_candidates(
         return []
 
     # Lightweight fetch: aggregate 14d spend per ad (no daily breakdown)
-    ad_spend = _fetch_14d_spend(config)
+    ad_spend = _fetch_lookback_spend(config)
 
     today = datetime.now().date()
     candidates = []
