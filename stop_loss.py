@@ -15,8 +15,8 @@ Rules:
              (protection expires at spend>$100 & 0p)
     restart: PAUSED + spend>$30 & ROAS>=1.6 & purchases>0
 - CBO adsets (today's metrics):
-    stop:    ACTIVE + spend>$100 & ROAS<1.6
-    restart: PAUSED + spend>$100 & ROAS>1.6
+    stop:    ACTIVE + spend>$200 & ROAS<2.0
+    restart: PAUSED + spend>$200 & ROAS>2.0
 
 Skips: adsets whose name contains OFF, ads whose name contains RUN.
 """
@@ -81,8 +81,8 @@ TESTING_AD_CHEAP_ATC_PROTECT = 6.0
 TESTING_AD_CHEAP_ATC_CEILING = 100.0
 
 # CBO campaigns — adset-level rule (today's metrics)
-CBO_ADSET_SPEND_THRESHOLD = 100.0
-CBO_ADSET_ROAS_THRESHOLD = 1.6
+CBO_ADSET_SPEND_THRESHOLD = 200.0
+CBO_ADSET_ROAS_THRESHOLD = 2.0
 
 
 @dataclass
@@ -703,7 +703,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         if "OFF" in current_name.upper():
             continue
 
-        # STOP-LOSS: ACTIVE + spend > $100 + ROAS < 1.4
+        # STOP-LOSS: ACTIVE + spend > $200 + ROAS < 2.0
         if (status == "ACTIVE"
             and spend > CBO_ADSET_SPEND_THRESHOLD
             and roas < CBO_ADSET_ROAS_THRESHOLD):
@@ -734,7 +734,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART: PAUSED + spend > $100 + ROAS > 1.4
+        # RESTART: PAUSED + spend > $200 + ROAS > 2.0
         if (status == "PAUSED"
             and spend > CBO_ADSET_SPEND_THRESHOLD
             and roas > CBO_ADSET_ROAS_THRESHOLD):
