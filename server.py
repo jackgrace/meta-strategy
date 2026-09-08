@@ -27,6 +27,7 @@ from main import (
     run_testing_kill,
     run_midnight_restart,
     run_ad_kill_3d,
+    run_cbo_ad_kill_3d,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._run_midnight_restart_endpoint(source="http")
         elif self.path == "/ad-kill-3d":
             self._run_ad_kill_3d_endpoint(source="http")
+        elif self.path == "/cbo-ad-kill-3d":
+            self._run_cbo_ad_kill_3d_endpoint(source="http")
         else:
             self._respond(404, {"error": "not found"})
 
@@ -77,6 +80,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._handle_slack(run_midnight_restart, "Running midnight restart now...")
         elif self.path == "/slack/ad-kill-3d":
             self._handle_slack(run_ad_kill_3d, "Running ad 3d hard-kill now...")
+        elif self.path == "/slack/cbo-ad-kill-3d":
+            self._handle_slack(run_cbo_ad_kill_3d, "Running CBO ad 3d hard-kill now...")
         elif self.path == "/run":
             self._run_check(source="http")
         elif self.path == "/fatigue":
@@ -160,6 +165,15 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(200, result)
         except Exception as e:
             logger.error(f"Ad kill 3d failed: {e}")
+            self._respond(500, {"status": "error", "message": str(e)})
+
+    def _run_cbo_ad_kill_3d_endpoint(self, source: str):
+        logger.info(f"Manual trigger via {source} — CBO ad kill 3d")
+        try:
+            result = run_cbo_ad_kill_3d()
+            self._respond(200, result)
+        except Exception as e:
+            logger.error(f"CBO ad kill 3d failed: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
 
     def _set_adset_roas(self):
@@ -382,6 +396,14 @@ def _run_daily_scheduler():
         #     logger.error(f"Scheduled ad-kill-3d failed: {e}")
         #     _send_failure_notification(f"ad-kill-3d: {e}")
 
+        # 3d hard-kill for CBO ads (per adset-name keyword).
+        try:
+            logger.info("Scheduler: running daily CBO ad 3d hard-kill")
+            run_cbo_ad_kill_3d()
+        except Exception as e:
+            logger.error(f"Scheduled cbo-ad-kill-3d failed: {e}")
+            _send_failure_notification(f"cbo-ad-kill-3d: {e}")
+
 
 def _send_stop_loss_failure(error_msg: str):
     """Notify Slack when a stop-loss run fails."""
@@ -485,6 +507,7 @@ def start_server():
     logger.info(f"  GET  /testing-kill   — testing campaign kill")
     logger.info(f"  GET  /midnight-restart — reactivate qualifying adsets")
     logger.info(f"  GET  /ad-kill-3d     — 3d hard-kill for CC/SCALE/VALUE ads")
+    logger.info(f"  GET  /cbo-ad-kill-3d — 3d hard-kill for CBO ads (MIK/LED)")
     logger.info(f"  GET  /activate?id=X  — manually reactivate an ad/adset")
     logger.info(f"  GET  /set-adset-roas?id=X&roas=1.8 — set min-ROAS bid target")
     logger.info(f"  POST /slack/trigger  — Slack: all checks")
@@ -493,7 +516,8 @@ def start_server():
     logger.info(f"  POST /slack/stoploss — Slack: stop-loss")
     logger.info(f"  POST /slack/testing-kill — Slack: testing kill")
     logger.info(f"  POST /slack/midnight-restart — Slack: midnight restart")
-    logger.info(f"  POST /slack/ad-kill-3d — Slack: 3d hard-kill")
+    logger.info(f"  POST /slack/ad-kill-3d — Slack: 3d hard-kill (CC/SCALE/VALUE)")
+    logger.info(f"  POST /slack/cbo-ad-kill-3d — Slack: CBO ad 3d hard-kill")
     logger.info(f"  GET  /health         — health check")
     server.serve_forever()
 
