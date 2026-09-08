@@ -11,8 +11,8 @@ Rules:
     ceiling: ACTIVE + spend>$50 & ROAS<1.8
     restart: PAUSED + spend>$30 & ROAS>=1.8 & purchases>0
 - TESTING ads (rolling 7d, cheap-ATC protected):
-    stop:    ACTIVE + spend>$30 & (ROAS<1.6 OR 0p), skip if ATCs>0 & CPA/ATC<$6
-             (protection expires at spend>$100 & 0p)
+    stop:    ACTIVE + spend>$30 & (ROAS<1.6 OR 0p), skip if ATCs>0 & CPA/ATC<$5
+             (unconditional — no spend/ROAS ceiling on cheap-ATC ads)
     restart: PAUSED + spend>$30 & ROAS>=1.6 & purchases>0
 - CBO adsets (today's metrics):
     stop:    ACTIVE + spend>$200 & ROAS<2.0
@@ -72,13 +72,10 @@ TESTING_ADSET_CEILING_ROAS = 1.8
 TESTING_AD_7D_ENABLED = True
 TESTING_AD_SPEND_THRESHOLD_7D = 30.0
 TESTING_AD_ROAS_THRESHOLD_7D = 1.6
-# Protect: if the audience is adding to cart cheaply, keep the ad running
-# even without purchases yet. ASC is signalling engagement — don't kill it.
-TESTING_AD_CHEAP_ATC_PROTECT = 6.0
-# Hard ceiling: the cheap-ATC protection expires at this spend if still
-# 0 purchases — engagement without conversion for this long isn't a
-# funnel-warming signal, it's a broken funnel.
-TESTING_AD_CHEAP_ATC_CEILING = 100.0
+# Unconditional protection: if CPA/ATC < $5 the ad keeps running
+# regardless of spend or ROAS. Sub-$5 ATCs are strong enough audience
+# signal that we let ASC keep testing conversion at its own pace.
+TESTING_AD_CHEAP_ATC_PROTECT = 5.0
 
 # CBO campaigns — adset-level rule (today's metrics)
 CBO_ADSET_SPEND_THRESHOLD = 200.0
@@ -807,14 +804,13 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             if spend <= TESTING_AD_SPEND_THRESHOLD_7D:
                 continue
 
-            # Cheap-ATC protection: keep an ad running if the audience is
-            # adding to cart cheaply, even without purchases yet. Only applies
-            # when there ARE ATCs — 0 ATCs still trips the pause. And the
-            # protection expires once spend > $50 with still 0 purchases.
+            # Cheap-ATC protection: keep an ad running unconditionally if
+            # CPA/ATC < $5. Only applies when there ARE ATCs — 0 ATCs still
+            # trips the pause. No spend or ROAS ceiling — sub-$5 ATC signal
+            # is trusted regardless.
             cheap_atc_protected = (
                 atcs > 0
                 and cost_per_atc < TESTING_AD_CHEAP_ATC_PROTECT
-                and not (spend > TESTING_AD_CHEAP_ATC_CEILING and purchases == 0)
             )
 
             # STOP: ACTIVE + 7d spend > $30 + (ROAS < 1.6 OR 0 purchases)
