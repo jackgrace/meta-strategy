@@ -396,13 +396,15 @@ def _run_daily_scheduler():
         #     logger.error(f"Scheduled ad-kill-3d failed: {e}")
         #     _send_failure_notification(f"ad-kill-3d: {e}")
 
-        # 3d hard-kill for CBO ads (per adset-name keyword).
-        try:
-            logger.info("Scheduler: running daily CBO ad 3d hard-kill")
-            run_cbo_ad_kill_3d()
-        except Exception as e:
-            logger.error(f"Scheduled cbo-ad-kill-3d failed: {e}")
-            _send_failure_notification(f"cbo-ad-kill-3d: {e}")
+        # 3d hard-kill for CBO ads — DISABLED.
+        # Module + /cbo-ad-kill-3d endpoint remain for manual triggering,
+        # but nothing fires automatically. Uncomment to re-enable.
+        # try:
+        #     logger.info("Scheduler: running daily CBO ad 3d hard-kill")
+        #     run_cbo_ad_kill_3d()
+        # except Exception as e:
+        #     logger.error(f"Scheduled cbo-ad-kill-3d failed: {e}")
+        #     _send_failure_notification(f"cbo-ad-kill-3d: {e}")
 
 
 def _send_stop_loss_failure(error_msg: str):

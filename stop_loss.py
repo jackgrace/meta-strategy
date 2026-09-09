@@ -88,6 +88,8 @@ CBO_ADSET_ROAS_THRESHOLD = 1.2
 # CBO ad-level rules (today's metrics), keyed by adset-name keyword.
 # Only ads whose parent adset name contains one of these keywords are
 # evaluated; each keyword has its own spend threshold.
+# Flip CBO_AD_INTRADAY_ENABLED to True to re-enable.
+CBO_AD_INTRADAY_ENABLED = False
 CBO_AD_ROAS_THRESHOLD = 2.0
 CBO_AD_KEYWORD_SPEND_THRESHOLDS: dict[str, float] = {
     "MIK": 80.0,
@@ -783,6 +785,8 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
     cbo_ad_fail = 0
 
     for ad_id, ad in today_ads.items():
+        if not CBO_AD_INTRADAY_ENABLED:
+            break
         if not _is_cbo_campaign(ad["campaign_name"]):
             continue
 
