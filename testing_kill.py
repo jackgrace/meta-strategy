@@ -8,9 +8,10 @@ PAUSE ad IF:
 - Adset name does NOT contain 'OFF'
 - Ad name does NOT contain 'RUN'
 - Ad is currently ACTIVE
+- NOT (ATCs > 0 AND CPA/ATC < $6)    ← cheap-ATC protection floor
 - AND either branch matches:
     A) DEAD:       30d spend > $50  AND  (0 ATCs OR 0 purchases)
-    B) EFFICIENCY: 30d spend > $50  AND  CPA/ATC < $10  AND  (0 purchases OR ROAS < 1.6)
+    B) EFFICIENCY: 30d spend > $50  AND  $6 <= CPA/ATC < $10  AND  (0 purchases OR ROAS < 1.6)
 """
 
 import logging
@@ -31,7 +32,11 @@ AEST = timezone(timedelta(hours=10))
 TESTING_KILL_ENABLED = True
 DEAD_SPEND_THRESHOLD = 50.0        # spend > $50 & (0 ATCs OR 0 purchases)
 EFFICIENCY_SPEND_THRESHOLD = 50.0  # spend > $50 & CPA/ATC < $10 & (0 purchases OR ROAS < 1.6)
-CHEAP_ATC_THRESHOLD = 10.0         # "cheap ATCs" cutoff
+CHEAP_ATC_THRESHOLD = 10.0         # "cheap ATCs" cutoff for EFFICIENCY branch
+# Cheap-ATC protection floor: ads with ATCs > 0 & CPA/ATC < $6 are exempt
+# from both kill branches — sub-$6 ATCs are strong enough audience signal
+# that we trust ASC to keep testing conversion.
+CHEAP_ATC_PROTECT_FLOOR = 6.0
 MIN_ROAS_FOR_KILL = 1.6
 
 
@@ -233,9 +238,14 @@ def run_testing_kill(config: Config, dry_run: bool = False) -> list[TestingKillA
         considered += 1
 
         # Rule branches (each has its own spend gate):
-        # A) DEAD:       spend > $30 & (0 ATCs OR 0 purchases)
-        # B) EFFICIENCY: spend > $30 & CPA/ATC < $10 & (0 purchases OR ROAS < 1.6)
-        #    "cheap ATCs that don't convert" — engagement but no sales
+        # Cheap-ATC protection: sub-$6 CPA/ATC skips both branches entirely.
+        # ASC is signalling audience interest; give it time to test convert.
+        if ad["atcs"] > 0 and ad["cost_per_atc"] < CHEAP_ATC_PROTECT_FLOOR:
+            continue
+
+        # A) DEAD:       spend > $50 & (0 ATCs OR 0 purchases)
+        # B) EFFICIENCY: spend > $50 & $6 <= CPA/ATC < $10 & (0 purchases OR ROAS < 1.6)
+        #    "moderately-cheap ATCs that don't convert" — engagement but no sales
         dead = ad["spend"] > DEAD_SPEND_THRESHOLD and (ad["atcs"] == 0 or ad["purchases"] == 0)
         efficiency = (
             ad["spend"] > EFFICIENCY_SPEND_THRESHOLD

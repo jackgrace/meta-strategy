@@ -11,7 +11,7 @@ Rules:
     ceiling: ACTIVE + spend>$50 & ROAS<1.8
     restart: PAUSED + spend>$30 & ROAS>=1.8 & purchases>0
 - TESTING ads (rolling 7d, cheap-ATC protected):
-    stop:    ACTIVE + spend>$30 & (ROAS<1.6 OR 0p), skip if ATCs>0 & CPA/ATC<$5
+    stop:    ACTIVE + spend>$30 & (ROAS<1.6 OR 0p), skip if ATCs>0 & CPA/ATC<$6
              (unconditional — no spend/ROAS ceiling on cheap-ATC ads)
     restart: PAUSED + spend>$30 & ROAS>=1.6 & purchases>0
 - CBO adsets (today's metrics):
@@ -76,10 +76,10 @@ TESTING_ADSET_CEILING_ROAS = 1.8
 TESTING_AD_7D_ENABLED = True
 TESTING_AD_SPEND_THRESHOLD_7D = 30.0
 TESTING_AD_ROAS_THRESHOLD_7D = 1.6
-# Unconditional protection: if CPA/ATC < $5 the ad keeps running
-# regardless of spend or ROAS. Sub-$5 ATCs are strong enough audience
+# Unconditional protection: if CPA/ATC < $6 the ad keeps running
+# regardless of spend or ROAS. Sub-$6 ATCs are strong enough audience
 # signal that we let ASC keep testing conversion at its own pace.
-TESTING_AD_CHEAP_ATC_PROTECT = 5.0
+TESTING_AD_CHEAP_ATC_PROTECT = 6.0
 
 # CBO campaigns — adset-level rule (today's metrics)
 CBO_ADSET_SPEND_THRESHOLD = 1000.0
