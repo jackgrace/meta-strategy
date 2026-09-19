@@ -18,7 +18,9 @@ Rules:
     stop:    ACTIVE + spend>$2500 & ROAS<1.5
     restart: PAUSED + spend>$2500 & ROAS>1.5
 - SCALE/CBO ads (today's metrics):
-    stop:    ACTIVE + spend>$150 & (ROAS<1.4 OR CPA/ATC>$8) & adset ROAS<1.6
+    stop:    ACTIVE + [ (spend>$150 & (ROAS<1.4 OR CPA/ATC>$8) & adset ROAS<1.6)
+                       OR (spend>$50 & spend-share>50% & CPC<$1 &
+                           adset ROAS<1.5 & (ROAS<1.4 OR CPA/ATC>$8)) ]
     restart: PAUSED + (adset ROAS>=1.6 OR (ROAS>=1.4 & CPA/ATC<=$8))
     (skip RUN/OFF in ad name, OFF in adset name)
 - CBO ads (today's metrics, per adset-name keyword):
@@ -115,6 +117,21 @@ SCALE_CBO_AD_SPEND_THRESHOLD = 150.0
 SCALE_CBO_AD_ROAS_THRESHOLD = 1.4
 SCALE_CBO_AD_CPA_ATC_THRESHOLD = 8.0
 SCALE_CBO_AD_ADSET_ROAS_GATE = 1.6
+
+# Spend-hog pause branch: cheap-click ad taking > 50% of an
+# underperforming adset's spend. Fires even when the ad's own
+# spend is under the $150 primary threshold.
+#   Ad in SCALE/CBO campaign, ACTIVE, not RUN/OFF
+#   Adset ROAS < 1.5
+#   Ad spend / adset spend > 50%
+#   Ad CPC (link) < $1
+#   Ad ROAS < 1.4 OR (ATCs > 0 & CPA/ATC > $8)
+#   → pause
+SCALE_CBO_AD_SPEND_HOG_ENABLED = True
+SCALE_CBO_AD_SPEND_HOG_MIN_SPEND = 50.0    # floor so tiny adsets aren't touched
+SCALE_CBO_AD_SPEND_HOG_SHARE = 0.50
+SCALE_CBO_AD_SPEND_HOG_CPC = 1.0
+SCALE_CBO_AD_SPEND_HOG_ADSET_ROAS = 1.5
 
 
 @dataclass
@@ -231,6 +248,7 @@ def _fetch_today_metrics(config: Config) -> dict:
             revenue = 0.0
             purchases = 0
             atcs = 0
+            link_clicks = 0
             for av in row.get("action_values", []) or []:
                 if av.get("action_type") == "purchase":
                     revenue = float(av.get("value", 0))
@@ -239,8 +257,11 @@ def _fetch_today_metrics(config: Config) -> dict:
                     purchases = int(float(a.get("value", 0)))
                 elif a.get("action_type") == "add_to_cart":
                     atcs = int(float(a.get("value", 0)))
+                elif a.get("action_type") == "link_click":
+                    link_clicks = int(float(a.get("value", 0)))
 
             cost_per_atc = spend / atcs if atcs > 0 else 0
+            cpc_link = spend / link_clicks if link_clicks > 0 else 0
 
             ads[row["ad_id"]] = {
                 "ad_name": row.get("ad_name", "Unknown"),
@@ -254,6 +275,8 @@ def _fetch_today_metrics(config: Config) -> dict:
                 "roas": revenue / spend if spend > 0 else 0,
                 "atcs": atcs,
                 "cost_per_atc": cost_per_atc,
+                "link_clicks": link_clicks,
+                "cpc_link": cpc_link,
             }
 
         paging = data.get("paging", {})
@@ -927,9 +950,8 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         purchases = ad["purchases"]
         atcs = ad.get("atcs", 0)
         cost_per_atc = ad.get("cost_per_atc", 0)
-
-        if spend <= SCALE_CBO_AD_SPEND_THRESHOLD:
-            continue
+        link_clicks = ad.get("link_clicks", 0)
+        cpc_link = ad.get("cpc_link", 0)
 
         adset_data = adset_roas.get(ad["adset_id"], {})
         as_spend = adset_data.get("spend", 0)
@@ -939,14 +961,37 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         weak_roas = roas < SCALE_CBO_AD_ROAS_THRESHOLD
         adset_underperforming = as_roas < SCALE_CBO_AD_ADSET_ROAS_GATE
 
-        # PAUSE — requires adset itself to also be underperforming
-        if status == "ACTIVE" and (weak_roas or expensive_atc) and adset_underperforming:
+        # Spend-hog branch (fires below the $150 primary threshold):
+        # Cheap-click ad taking > 50% of an underperforming adset's spend
+        # with weak conversion metrics. Kills the whale that's soaking up
+        # budget on engagement but not converting, so budget redistributes.
+        spend_hog_fires = False
+        if (SCALE_CBO_AD_SPEND_HOG_ENABLED
+            and spend > SCALE_CBO_AD_SPEND_HOG_MIN_SPEND
+            and as_spend > 0
+            and (spend / as_spend) > SCALE_CBO_AD_SPEND_HOG_SHARE
+            and link_clicks > 0
+            and cpc_link < SCALE_CBO_AD_SPEND_HOG_CPC
+            and as_roas < SCALE_CBO_AD_SPEND_HOG_ADSET_ROAS
+            and (weak_roas or expensive_atc)):
+            spend_hog_fires = True
+
+        if not spend_hog_fires and spend <= SCALE_CBO_AD_SPEND_THRESHOLD:
+            continue
+
+        # PAUSE — either the primary $150 rule + adset gate, or the
+        # spend-hog branch (already fully qualified above).
+        primary_fires = (weak_roas or expensive_atc) and adset_underperforming
+        if status == "ACTIVE" and (primary_fires or spend_hog_fires):
             reason_bits = []
             if weak_roas:
                 reason_bits.append(f"ROAS {roas:.2f}<{SCALE_CBO_AD_ROAS_THRESHOLD}")
             if expensive_atc:
                 reason_bits.append(f"CPA/ATC ${cost_per_atc:.2f}>${SCALE_CBO_AD_CPA_ATC_THRESHOLD:.0f}")
             reason_bits.append(f"adset ROAS {as_roas:.2f}<{SCALE_CBO_AD_ADSET_ROAS_GATE}")
+            if spend_hog_fires:
+                share = spend / as_spend if as_spend > 0 else 0
+                reason_bits.append(f"spend-hog {share:.0%} @ CPC ${cpc_link:.2f}")
 
             if dry_run:
                 action, reason = "would_pause", f"dry run ({' & '.join(reason_bits)})"
