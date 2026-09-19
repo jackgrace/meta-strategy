@@ -55,7 +55,7 @@ RESTART_ROAS_THRESHOLD = 1.6
 #   Restart: PAUSED + spend > $2500 & ROAS >= 1.5
 # Matches campaigns whose name contains SCALE as a whole word only.
 # Flip SCALE_ADSET_ENABLED to False to pause the rule without deleting it.
-SCALE_ADSET_ENABLED = True
+SCALE_ADSET_ENABLED = False
 SCALE_ADSET_SPEND_THRESHOLD = 2500.0
 SCALE_ADSET_ROAS_THRESHOLD = 1.5
 
@@ -86,6 +86,8 @@ TESTING_AD_ROAS_THRESHOLD_7D = 1.6
 TESTING_AD_CHEAP_ATC_PROTECT = 6.0
 
 # CBO campaigns — adset-level rule (today's metrics)
+# Flip CBO_ADSET_ENABLED to False to pause the rule without deleting it.
+CBO_ADSET_ENABLED = False
 CBO_ADSET_SPEND_THRESHOLD = 2500.0
 CBO_ADSET_ROAS_THRESHOLD = 1.5
 
@@ -488,7 +490,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         if not ad["adset_id"]:
             continue
         campaign_name = ad["campaign_name"]
-        if _is_cbo_campaign(campaign_name):
+        if CBO_ADSET_ENABLED and _is_cbo_campaign(campaign_name):
             cbo_adset_ids.add(ad["adset_id"])
             adset_meta[ad["adset_id"]] = {
                 "adset_name": ad["adset_name"],
@@ -1161,8 +1163,7 @@ def build_stop_loss_slack_message(
             f"_SCALE adset: {'ON — stop spend>$'+str(int(SCALE_ADSET_SPEND_THRESHOLD))+' & ROAS<'+str(SCALE_ADSET_ROAS_THRESHOLD)+', restart mirror' if SCALE_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_TESTING adset: {('ON — early: spend>$'+str(int(TESTING_ADSET_EARLY_SPEND))+' & 0p & CPA/ATC>$'+str(int(TESTING_ADSET_EARLY_CPA_ATC))+' | ceiling: spend>$'+str(int(TESTING_ADSET_CEILING_SPEND))+' & ROAS<'+str(TESTING_ADSET_CEILING_ROAS)) if TESTING_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_TESTING ad (7d): {'ON' if TESTING_AD_7D_ENABLED else 'PAUSED (flag off)'}_\n"
-            f"_CBO adset stop: spend>${CBO_ADSET_SPEND_THRESHOLD:.0f} & ROAS<{CBO_ADSET_ROAS_THRESHOLD}_\n"
-            f"_CBO adset restart: spend>${CBO_ADSET_SPEND_THRESHOLD:.0f} & ROAS>{CBO_ADSET_ROAS_THRESHOLD}_\n"
+            f"_CBO adset: {'ON — stop spend>$'+str(int(CBO_ADSET_SPEND_THRESHOLD))+' & ROAS<'+str(CBO_ADSET_ROAS_THRESHOLD)+', restart mirror' if CBO_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_SCALE/CBO ad: {('ON — stop spend>$'+str(int(SCALE_CBO_AD_SPEND_THRESHOLD))+' & (ROAS<'+str(SCALE_CBO_AD_ROAS_THRESHOLD)+' OR CPA/ATC>$'+str(int(SCALE_CBO_AD_CPA_ATC_THRESHOLD))+') & adset ROAS<'+str(SCALE_CBO_AD_ADSET_ROAS_GATE)+', restart if adset recovers OR ad recovers') if SCALE_CBO_AD_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_CBO ad (per adset keyword) stop/restart: " + " | ".join(
                 f"{kw} spend>${int(t)} & ROAS{{<,>=}}{CBO_AD_ROAS_THRESHOLD}"
