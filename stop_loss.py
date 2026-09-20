@@ -3,8 +3,8 @@ Intra-day stop-loss. Runs every 15 min.
 
 Rules:
 - SCALE adsets (today's metrics):
-    stop:    ACTIVE + spend>$2500 & ROAS<1.5
-    restart: PAUSED + spend>$2500 & ROAS>=1.5 (intra-day if ROAS improves)
+    stop:    ACTIVE + spend>$200 & ROAS<1.6
+    restart: PAUSED + spend>$200 & ROAS>=1.6 (intra-day if ROAS improves)
     (skip adsets with OFF in name; midnight is the primary recovery path)
 - TESTING adsets (today's metrics, two pause branches):
     early:   ACTIVE + spend>$30 & 0p & CPA/ATC>$8
@@ -15,8 +15,8 @@ Rules:
              (unconditional — no spend/ROAS ceiling on cheap-ATC ads)
     restart: PAUSED + spend>$30 & ROAS>=1.6 & purchases>0
 - CBO adsets (today's metrics):
-    stop:    ACTIVE + spend>$2500 & ROAS<1.5
-    restart: PAUSED + spend>$2500 & ROAS>1.5
+    stop:    ACTIVE + spend>$200 & ROAS<1.6
+    restart: PAUSED + spend>$200 & ROAS>1.6
 - SCALE/CBO ads (today's metrics):
     stop:    ACTIVE + [ (spend>$150 & (ROAS<1.4 OR CPA/ATC>$8) & adset ROAS<1.6)
                        OR (spend>$50 & spend-share>50% & CPC<$1 &
@@ -53,13 +53,13 @@ STOP_CPA_ATC_THRESHOLD = 10.0  # cost per ATC above this — expensive ATCs = pa
 RESTART_ROAS_THRESHOLD = 1.6
 
 # SCALE — adset-level rule (today's metrics). Ad-level is off.
-#   Pause:   ACTIVE + spend > $2500 & ROAS < 1.5
-#   Restart: PAUSED + spend > $2500 & ROAS >= 1.5
+#   Pause:   ACTIVE + spend > $200 & ROAS < 1.6
+#   Restart: PAUSED + spend > $200 & ROAS >= 1.6
 # Matches campaigns whose name contains SCALE as a whole word only.
 # Flip SCALE_ADSET_ENABLED to False to pause the rule without deleting it.
-SCALE_ADSET_ENABLED = False
-SCALE_ADSET_SPEND_THRESHOLD = 2500.0
-SCALE_ADSET_ROAS_THRESHOLD = 1.5
+SCALE_ADSET_ENABLED = True
+SCALE_ADSET_SPEND_THRESHOLD = 200.0
+SCALE_ADSET_ROAS_THRESHOLD = 1.6
 
 # TESTING campaigns — adset-level rule (today's metrics)
 # Flip TESTING_ADSET_ENABLED to True to re-enable.
@@ -89,9 +89,9 @@ TESTING_AD_CHEAP_ATC_PROTECT = 6.0
 
 # CBO campaigns — adset-level rule (today's metrics)
 # Flip CBO_ADSET_ENABLED to False to pause the rule without deleting it.
-CBO_ADSET_ENABLED = False
-CBO_ADSET_SPEND_THRESHOLD = 2500.0
-CBO_ADSET_ROAS_THRESHOLD = 1.5
+CBO_ADSET_ENABLED = True
+CBO_ADSET_SPEND_THRESHOLD = 200.0
+CBO_ADSET_ROAS_THRESHOLD = 1.6
 
 # CBO ad-level rules (today's metrics), keyed by adset-name keyword.
 # Only ads whose parent adset name contains one of these keywords are
@@ -761,7 +761,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         if "OFF" in current_name.upper():
             continue
 
-        # STOP-LOSS: ACTIVE + spend > $2500 + ROAS < 1.5
+        # STOP-LOSS: ACTIVE + spend > $200 + ROAS < 1.6
         if (status == "ACTIVE"
             and spend > CBO_ADSET_SPEND_THRESHOLD
             and roas < CBO_ADSET_ROAS_THRESHOLD):
@@ -792,7 +792,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART: PAUSED + spend > $2500 + ROAS > 1.5
+        # RESTART: PAUSED + spend > $200 + ROAS > 1.6
         if (status == "PAUSED"
             and spend > CBO_ADSET_SPEND_THRESHOLD
             and roas > CBO_ADSET_ROAS_THRESHOLD):
