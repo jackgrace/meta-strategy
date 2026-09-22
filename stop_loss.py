@@ -19,7 +19,7 @@ Rules:
     restart: PAUSED + spend>$2000 & ROAS>1.6
 - SCALE ads (today's metrics):
     stop:    ACTIVE + spend>$100 & (ROAS<1.6 OR CPA/ATC>$8) & adset ROAS<1.6
-    restart: PAUSED + (adset ROAS>=1.6 OR (ROAS>=1.6 & CPA/ATC<=$8))
+    restart: PAUSED + adset ROAS>=1.6 AND (ROAS>=1.6 & CPA/ATC<=$8)
     (skip RUN/OFF in ad name, OFF in adset name)
 - CBO ads (today's metrics, per adset-name keyword):
     MIK adsets: ad spend>$80  & ROAS<2.0 → pause / mirror restart
@@ -1021,14 +1021,14 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART: either the adset recovered (>= 1.6) OR the ad itself
+        # RESTART: BOTH the adset recovered (>= 1.6) AND the ad itself
         # would no longer trigger pause (ROAS healthy + ATC cost healthy).
         ad_healthy = (
             roas >= SCALE_CBO_AD_ROAS_THRESHOLD
             and (atcs == 0 or cost_per_atc <= SCALE_CBO_AD_CPA_ATC_THRESHOLD)
         )
         adset_recovered = as_roas >= SCALE_CBO_AD_ADSET_ROAS_GATE
-        if status == "PAUSED" and (ad_healthy or adset_recovered):
+        if status == "PAUSED" and ad_healthy and adset_recovered:
 
             if dry_run:
                 action, reason = "would_activate", "dry run"
