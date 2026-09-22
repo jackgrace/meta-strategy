@@ -17,11 +17,9 @@ Rules:
 - CBO adsets (today's metrics):
     stop:    ACTIVE + spend>$2000 & ROAS<1.6
     restart: PAUSED + spend>$2000 & ROAS>1.6
-- SCALE/CBO ads (today's metrics):
-    stop:    ACTIVE + [ (spend>$150 & (ROAS<1.4 OR CPA/ATC>$8) & adset ROAS<1.6)
-                       OR (spend>$50 & spend-share>50% & CPC<$1 &
-                           adset ROAS<1.5 & (ROAS<1.4 OR CPA/ATC>$8)) ]
-    restart: PAUSED + (adset ROAS>=1.6 OR (ROAS>=1.4 & CPA/ATC<=$8))
+- SCALE ads (today's metrics):
+    stop:    ACTIVE + spend>$100 & (ROAS<1.6 OR CPA/ATC>$8) & adset ROAS<1.6
+    restart: PAUSED + (adset ROAS>=1.6 OR (ROAS>=1.6 & CPA/ATC<=$8))
     (skip RUN/OFF in ad name, OFF in adset name)
 - CBO ads (today's metrics, per adset-name keyword):
     MIK adsets: ad spend>$80  & ROAS<2.0 → pause / mirror restart
@@ -115,9 +113,9 @@ CBO_AD_KEYWORD_SPEND_THRESHOLDS: dict[str, float] = {
 # The rule has two independent branches — flip either flag alone to
 # disable just that branch while keeping the other live.
 SCALE_CBO_AD_ENABLED = True
-SCALE_CBO_AD_PRIMARY_ENABLED = False
-SCALE_CBO_AD_SPEND_THRESHOLD = 150.0
-SCALE_CBO_AD_ROAS_THRESHOLD = 1.4
+SCALE_CBO_AD_PRIMARY_ENABLED = True
+SCALE_CBO_AD_SPEND_THRESHOLD = 100.0
+SCALE_CBO_AD_ROAS_THRESHOLD = 1.6
 SCALE_CBO_AD_CPA_ATC_THRESHOLD = 8.0
 SCALE_CBO_AD_ADSET_ROAS_GATE = 1.6
 
@@ -130,7 +128,7 @@ SCALE_CBO_AD_ADSET_ROAS_GATE = 1.6
 #   Ad CPC (link) < $1
 #   Ad ROAS < 1.4 OR (ATCs > 0 & CPA/ATC > $8)
 #   → pause
-SCALE_CBO_AD_SPEND_HOG_ENABLED = True
+SCALE_CBO_AD_SPEND_HOG_ENABLED = False
 SCALE_CBO_AD_SPEND_HOG_MIN_SPEND = 50.0    # floor so tiny adsets aren't touched
 SCALE_CBO_AD_SPEND_HOG_SHARE = 0.50
 SCALE_CBO_AD_SPEND_HOG_CPC = 1.0
@@ -922,7 +920,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 adset_spend=as_spend, adset_roas=as_roas,
             ))
 
-    # === SCALE / CBO ad-level stop-loss / restart (today's metrics) ===
+    # === SCALE ad-level stop-loss / restart (today's metrics) ===
     # Pause:   ACTIVE + spend > $150 & (ROAS < 1.4 OR CPA/ATC > $8)
     # Restart: PAUSED + spend > $150 & ROAS >= 1.4 & CPA/ATC <= $8
     scale_cbo_ad_stop = 0
@@ -932,7 +930,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
     for ad_id, ad in today_ads.items():
         if not SCALE_CBO_AD_ENABLED:
             break
-        if not (_is_scale_campaign(ad["campaign_name"]) or _is_cbo_campaign(ad["campaign_name"])):
+        if not (_is_scale_campaign(ad["campaign_name"])):
             continue
 
         info = ad_info.get(ad_id, {})
@@ -1008,11 +1006,11 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 if success:
                     action = "paused"
                     scale_cbo_ad_stop += 1
-                    logger.info(f"SCALE/CBO AD STOP: Paused {ad_id} ({current_ad_name}) — spend ${spend:.2f}, {', '.join(reason_bits)}, {purchases}p")
+                    logger.info(f"SCALE AD STOP: Paused {ad_id} ({current_ad_name}) — spend ${spend:.2f}, {', '.join(reason_bits)}, {purchases}p")
                 else:
                     action = "failed"
                     scale_cbo_ad_fail += 1
-                    logger.warning(f"SCALE/CBO AD STOP: Failed to pause {ad_id}: {reason}")
+                    logger.warning(f"SCALE AD STOP: Failed to pause {ad_id}: {reason}")
 
             actions.append(StopLossAction(
                 ad_id=ad_id, ad_name=current_ad_name,
@@ -1039,11 +1037,11 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 if success:
                     action = "activated"
                     scale_cbo_ad_restart += 1
-                    logger.info(f"SCALE/CBO AD RESTART: Activated {ad_id} ({current_ad_name}) — spend ${spend:.2f}, ROAS {roas:.2f}, CPA/ATC ${cost_per_atc:.2f}, {purchases}p")
+                    logger.info(f"SCALE AD RESTART: Activated {ad_id} ({current_ad_name}) — spend ${spend:.2f}, ROAS {roas:.2f}, CPA/ATC ${cost_per_atc:.2f}, {purchases}p")
                 else:
                     action = "failed"
                     scale_cbo_ad_fail += 1
-                    logger.warning(f"SCALE/CBO AD RESTART: Failed to activate {ad_id}: {reason}")
+                    logger.warning(f"SCALE AD RESTART: Failed to activate {ad_id}: {reason}")
 
             actions.append(StopLossAction(
                 ad_id=ad_id, ad_name=current_ad_name,
@@ -1164,7 +1162,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         f"ADSET (TESTING): {testing_stop} paused, {testing_restart} activated, {testing_fail} failed │ "
         f"ADSET (CBO): {cbo_stop} paused, {cbo_restart} activated, {cbo_fail} failed │ "
         f"AD (CBO MIK/LED): {cbo_ad_stop} paused, {cbo_ad_restart} activated, {cbo_ad_fail} failed │ "
-        f"AD (SCALE/CBO): {scale_cbo_ad_stop} paused, {scale_cbo_ad_restart} activated, {scale_cbo_ad_fail} failed"
+        f"AD (SCALE): {scale_cbo_ad_stop} paused, {scale_cbo_ad_restart} activated, {scale_cbo_ad_fail} failed"
     )
     return actions, adset_actions
 
@@ -1217,7 +1215,7 @@ def build_stop_loss_slack_message(
             f"_TESTING adset: {('ON — early: spend>$'+str(int(TESTING_ADSET_EARLY_SPEND))+' & 0p & CPA/ATC>$'+str(int(TESTING_ADSET_EARLY_CPA_ATC))+' | ceiling: spend>$'+str(int(TESTING_ADSET_CEILING_SPEND))+' & ROAS<'+str(TESTING_ADSET_CEILING_ROAS)) if TESTING_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_TESTING ad (7d): {'ON' if TESTING_AD_7D_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_CBO adset: {'ON — stop spend>$'+str(int(CBO_ADSET_SPEND_THRESHOLD))+' & ROAS<'+str(CBO_ADSET_ROAS_THRESHOLD)+', restart mirror' if CBO_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
-            f"_SCALE/CBO ad: {'ON' if SCALE_CBO_AD_ENABLED else 'PAUSED (flag off)'}"
+            f"_SCALE ad: {'ON' if SCALE_CBO_AD_ENABLED else 'PAUSED (flag off)'}"
             f" — primary(\\$150/adset): {'ON' if SCALE_CBO_AD_PRIMARY_ENABLED else 'off'}"
             f", spend-hog(>50% share, CPC<\\$1): {'ON' if SCALE_CBO_AD_SPEND_HOG_ENABLED else 'off'}_\n"
             f"_CBO ad (per adset keyword) stop/restart: " + " | ".join(
