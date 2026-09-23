@@ -18,7 +18,7 @@ Rules:
     stop:    ACTIVE + spend>$2000 & ROAS<1.6
     restart: PAUSED + spend>$2000 & ROAS>1.6
 - SCALE ads (today's metrics):
-    stop:    ACTIVE + spend>$100 & (ROAS<1.6 OR CPA/ATC>$8) & adset ROAS<1.6
+    stop:    ACTIVE + spend>$100 & ROAS<1.6 & CPA/ATC>$8 & adset ROAS<1.6
     restart: PAUSED + adset ROAS>=1.6 AND (ROAS>=1.6 & CPA/ATC<=$8)
     (skip RUN/OFF in ad name, OFF in adset name)
 - CBO ads (today's metrics, per adset-name keyword):
@@ -980,12 +980,16 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         if not spend_hog_fires and spend <= SCALE_CBO_AD_SPEND_THRESHOLD:
             continue
 
-        # PAUSE — either the primary $150 rule + adset gate, or the
+        # PAUSE — either the primary $100 rule + adset gate, or the
         # spend-hog branch (already fully qualified above).
+        # Primary needs BOTH weak ROAS AND expensive ATCs (a profitable
+        # ad with expensive ATCs still survives — killing a 2.3x-ROAS
+        # ad for early-funnel cost is counter-productive).
         primary_fires = (
             SCALE_CBO_AD_PRIMARY_ENABLED
             and spend > SCALE_CBO_AD_SPEND_THRESHOLD
-            and (weak_roas or expensive_atc)
+            and weak_roas
+            and expensive_atc
             and adset_underperforming
         )
         if status == "ACTIVE" and (primary_fires or spend_hog_fires):
