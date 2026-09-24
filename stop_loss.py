@@ -120,6 +120,11 @@ SCALE_CBO_AD_SPEND_THRESHOLD = 100.0
 SCALE_CBO_AD_ROAS_THRESHOLD = 1.6
 SCALE_CBO_AD_CPA_ATC_THRESHOLD = 8.0
 SCALE_CBO_AD_ADSET_ROAS_GATE = 1.6
+# Funnel-feeder protection: an ad bringing cheap clicks that convert to
+# ATCs is doing upstream work for the campaign — ASC will route
+# conversions through it. Never pause these on low ROAS alone.
+#   Skip pause if link CPC <= $1.00 AND ATCs > 0
+SCALE_CBO_AD_CHEAP_CPC_PROTECT = 1.0
 
 # Spend-hog pause branch: cheap-click ad taking > 50% of an
 # underperforming adset's spend. Fires even when the ad's own
@@ -963,6 +968,15 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         expensive_atc = atcs > 0 and cost_per_atc > SCALE_CBO_AD_CPA_ATC_THRESHOLD
         weak_roas = roas < SCALE_CBO_AD_ROAS_THRESHOLD
         adset_underperforming = as_roas < SCALE_CBO_AD_ADSET_ROAS_GATE
+        # Funnel feeder — cheap clicks that convert to ATCs. Never pause
+        # these on low ROAS — they're doing upstream work for the campaign
+        # (cheap engagement that other ads convert). Restart branch still
+        # runs so a funnel feeder that got paused earlier can come back.
+        funnel_feeder = (
+            atcs > 0
+            and cpc_link > 0
+            and cpc_link <= SCALE_CBO_AD_CHEAP_CPC_PROTECT
+        )
 
         # Spend-hog branch (fires below the $150 primary threshold):
         # Cheap-click ad taking > 50% of an underperforming adset's spend
@@ -993,8 +1007,9 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             and weak_roas
             and expensive_atc
             and adset_underperforming
+            and not funnel_feeder
         )
-        if status == "ACTIVE" and (primary_fires or spend_hog_fires):
+        if status == "ACTIVE" and (primary_fires or (spend_hog_fires and not funnel_feeder)):
             reason_bits = []
             if weak_roas:
                 reason_bits.append(f"ROAS {roas:.2f}<{SCALE_CBO_AD_ROAS_THRESHOLD}")
@@ -1222,8 +1237,9 @@ def build_stop_loss_slack_message(
             f"_TESTING ad (7d): {'ON' if TESTING_AD_7D_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_CBO adset: {'ON — stop spend>$'+str(int(CBO_ADSET_SPEND_THRESHOLD))+' & ROAS<'+str(CBO_ADSET_ROAS_THRESHOLD)+', restart mirror' if CBO_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_SCALE ad: {'ON' if SCALE_CBO_AD_ENABLED else 'PAUSED (flag off)'}"
-            f" — primary(\\$150/adset): {'ON' if SCALE_CBO_AD_PRIMARY_ENABLED else 'off'}"
-            f", spend-hog(>50% share, CPC<\\$1): {'ON' if SCALE_CBO_AD_SPEND_HOG_ENABLED else 'off'}_\n"
+            f" — primary(\\$100/adset): {'ON' if SCALE_CBO_AD_PRIMARY_ENABLED else 'off'}"
+            f", spend-hog(>50% share, CPC<\\$1): {'ON' if SCALE_CBO_AD_SPEND_HOG_ENABLED else 'off'}"
+            f", funnel-feeder skip: CPC<=\\${SCALE_CBO_AD_CHEAP_CPC_PROTECT} & ATCs>0_\n"
             f"_CBO ad (per adset keyword) stop/restart: " + " | ".join(
                 f"{kw} spend>${int(t)} & ROAS{{<,>=}}{CBO_AD_ROAS_THRESHOLD}"
                 for kw, t in CBO_AD_KEYWORD_SPEND_THRESHOLDS.items()
