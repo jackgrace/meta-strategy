@@ -112,8 +112,8 @@ CBO_AD_KEYWORD_SPEND_THRESHOLDS: dict[str, float] = {
 # Flip SCALE_CBO_AD_ENABLED to False to pause the rule.
 # The rule has two independent branches — flip either flag alone to
 # disable just that branch while keeping the other live.
-SCALE_CBO_AD_ENABLED = True
-SCALE_CBO_AD_PRIMARY_ENABLED = True
+SCALE_CBO_AD_ENABLED = False
+SCALE_CBO_AD_PRIMARY_ENABLED = False
 SCALE_CBO_AD_SPEND_THRESHOLD = 100.0
 SCALE_CBO_AD_ROAS_THRESHOLD = 1.6
 SCALE_CBO_AD_CPA_ATC_THRESHOLD = 8.0
