@@ -61,7 +61,7 @@ SCALE_ADSET_ROAS_THRESHOLD = 1.5
 
 # TESTING campaigns — adset-level rule (today's metrics)
 # Flip TESTING_ADSET_ENABLED to True to re-enable.
-TESTING_ADSET_ENABLED = False
+TESTING_ADSET_ENABLED = True
 # Two pause branches:
 #   Early:   spend > $30 & 0 purchases & CPA/ATC > $8
 #            (kills expensive-ATC-no-convert bleed fast)
@@ -77,7 +77,7 @@ TESTING_ADSET_CEILING_ROAS = 1.8
 
 # TESTING campaigns — ad-level rule (rolling 7d metrics)
 # Flip TESTING_AD_7D_ENABLED to True to re-enable.
-TESTING_AD_7D_ENABLED = False
+TESTING_AD_7D_ENABLED = True
 TESTING_AD_SPEND_THRESHOLD_7D = 30.0
 TESTING_AD_ROAS_THRESHOLD_7D = 1.6
 # Unconditional protection: if CPA/ATC < $6 the ad keeps running
@@ -112,8 +112,8 @@ CBO_AD_KEYWORD_SPEND_THRESHOLDS: dict[str, float] = {
 # Flip SCALE_CBO_AD_ENABLED to False to pause the rule.
 # The rule has two independent branches — flip either flag alone to
 # disable just that branch while keeping the other live.
-SCALE_CBO_AD_ENABLED = False
-SCALE_CBO_AD_PRIMARY_ENABLED = False
+SCALE_CBO_AD_ENABLED = True
+SCALE_CBO_AD_PRIMARY_ENABLED = True
 SCALE_CBO_AD_SPEND_THRESHOLD = 100.0
 SCALE_CBO_AD_ROAS_THRESHOLD = 1.6
 SCALE_CBO_AD_CPA_ATC_THRESHOLD = 8.0
