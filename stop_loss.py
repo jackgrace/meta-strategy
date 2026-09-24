@@ -17,10 +17,15 @@ Rules:
 - CBO adsets (today's metrics):
     stop:    ACTIVE + spend>$1000 & ROAS<1.4
     restart: PAUSED + spend>$1000 & ROAS>=1.4
-- SCALE ads (today's metrics):
-    stop:    ACTIVE + spend>$100 & ROAS<1.6 & CPA/ATC>$8 & adset ROAS<1.6
-    restart: PAUSED + adset ROAS>=1.6 AND (ROAS>=1.6 & CPA/ATC<=$8)
+- SCALE + CBO ads (today's metrics, peer-relative):
+    stop:    ACTIVE + spend>$50 & adset ROAS<1.6
+             & (CPC>1.25x peer avg OR (ATCs>0 & CPA/ATC>1.25x peer avg))
+    restart: PAUSED + spend>$50 & adset ROAS>=1.6
+             & CPC not expensive vs peers
+             & (ATCs==0 OR CPA/ATC not expensive vs peers)
+    peers:   other ads in same adset with today spend > $20
     (skip RUN/OFF in ad name, OFF in adset name)
+    (funnel-feeder skip: link CPC<=$1 & ATCs>0 -> keep running)
 - CBO ads (today's metrics, per adset-name keyword):
     MIK adsets: ad spend>$80  & ROAS<2.0 → pause / mirror restart
     LED adsets: ad spend>$130 & ROAS<2.0 → pause / mirror restart
@@ -104,26 +109,35 @@ CBO_AD_KEYWORD_SPEND_THRESHOLDS: dict[str, float] = {
     "LED": 130.0,
 }
 
-# SCALE/CBO ad-level intra-day rule (today's metrics).
+# SCALE/CBO ad-level intra-day rule (today's metrics, peer-relative).
 # Ad in a SCALE or CBO campaign; parent adset not OFF; ad not RUN/OFF.
-# Adset-ROAS gate: healthy adsets (ROAS >= 1.6) protect their weak ads.
-#   Pause:   ACTIVE + spend > $150 & (ROAS < 1.4 OR CPA/ATC > $8)
-#                    & adset ROAS < 1.6
-#   Restart: PAUSED + spend > $150 & (adset ROAS >= 1.6
-#                                     OR (ROAS >= 1.4 & CPA/ATC <= $8))
-# Flip SCALE_CBO_AD_ENABLED to False to pause the rule.
-# The rule has two independent branches — flip either flag alone to
-# disable just that branch while keeping the other live.
+# ROAS is NOT used as a pause signal — an ad with weak ROAS can still be
+# feeding the funnel. Instead: compare the ad's CPC and CPA/ATC to its
+# adset peers (other ads in the same adset with spend > $20). If either
+# is >25% above the peer baseline, and the adset itself is underperforming,
+# pause.
+#   Pause:   ACTIVE + spend > $50 & adset ROAS < 1.6
+#            & (
+#                 CPC > 1.25 * peer avg CPC
+#              OR (ATCs > 0 & CPA/ATC > 1.25 * peer avg CPA/ATC)
+#              )
+#            (ATCs == 0 -> only CPC path can fire)
+#   Restart: PAUSED + spend > $50 & adset ROAS >= 1.6
+#            & CPC not expensive vs peers
+#            & (ATCs == 0 OR CPA/ATC not expensive vs peers)
 SCALE_CBO_AD_ENABLED = True
 SCALE_CBO_AD_PRIMARY_ENABLED = True
-SCALE_CBO_AD_SPEND_THRESHOLD = 100.0
+SCALE_CBO_AD_SPEND_THRESHOLD = 50.0
+SCALE_CBO_AD_PEER_MIN_SPEND = 20.0    # ads included in the peer baseline
+SCALE_CBO_AD_PEER_CPC_MULT = 1.25     # CPC > mult * peer avg -> expensive
+SCALE_CBO_AD_PEER_CPA_MULT = 1.25     # CPA/ATC > mult * peer avg -> expensive
+SCALE_CBO_AD_ADSET_ROAS_GATE = 1.6
+# Legacy absolute thresholds — no longer used by the primary pause but
+# retained for the (disabled) spend-hog branch.
 SCALE_CBO_AD_ROAS_THRESHOLD = 1.6
 SCALE_CBO_AD_CPA_ATC_THRESHOLD = 8.0
-SCALE_CBO_AD_ADSET_ROAS_GATE = 1.6
-# Funnel-feeder protection: an ad bringing cheap clicks that convert to
-# ATCs is doing upstream work for the campaign — ASC will route
-# conversions through it. Never pause these on low ROAS alone.
-#   Skip pause if link CPC <= $1.00 AND ATCs > 0
+# Funnel-feeder absolute skip: cheap ABSOLUTE CPC (independent of peers)
+# with ATCs -> upstream work, don't pause.
 SCALE_CBO_AD_CHEAP_CPC_PROTECT = 1.0
 
 # Spend-hog pause branch: cheap-click ad taking > 50% of an
@@ -927,9 +941,35 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 adset_spend=as_spend, adset_roas=as_roas,
             ))
 
-    # === SCALE ad-level stop-loss / restart (today's metrics) ===
-    # Pause:   ACTIVE + spend > $150 & (ROAS < 1.4 OR CPA/ATC > $8)
-    # Restart: PAUSED + spend > $150 & ROAS >= 1.4 & CPA/ATC <= $8
+    # === SCALE + CBO ad-level stop-loss / restart (today's, peer-relative) ===
+    # Peer index: ads in the same adset with today spend > $20.
+    # A SCALE/CBO adset's baseline CPC / CPA-ATC come from summing peer spend
+    # and dividing by peer clicks / ATCs. An ad's own row is excluded from
+    # its own peer set (whale-effect protection).
+    scale_cbo_peer_index: dict[str, list] = {}
+    for _ad_id, _ad in today_ads.items():
+        if not (_is_scale_campaign(_ad["campaign_name"]) or _is_cbo_campaign(_ad["campaign_name"])):
+            continue
+        if _ad["spend"] > SCALE_CBO_AD_PEER_MIN_SPEND:
+            scale_cbo_peer_index.setdefault(_ad["adset_id"], []).append({
+                "ad_id": _ad_id,
+                "spend": _ad["spend"],
+                "link_clicks": _ad.get("link_clicks", 0),
+                "atcs": _ad.get("atcs", 0),
+            })
+
+    def _peer_baselines(adset_id: str, exclude_ad_id: str) -> tuple[float, float]:
+        """Return (peer_cpc, peer_cpa_atc) for the given adset excluding self."""
+        peers = [p for p in scale_cbo_peer_index.get(adset_id, []) if p["ad_id"] != exclude_ad_id]
+        if not peers:
+            return (0.0, 0.0)
+        total_spend = sum(p["spend"] for p in peers)
+        total_clicks = sum(p["link_clicks"] for p in peers)
+        total_atcs = sum(p["atcs"] for p in peers)
+        peer_cpc = total_spend / total_clicks if total_clicks > 0 else 0.0
+        peer_cpa = total_spend / total_atcs if total_atcs > 0 else 0.0
+        return (peer_cpc, peer_cpa)
+
     scale_cbo_ad_stop = 0
     scale_cbo_ad_restart = 0
     scale_cbo_ad_fail = 0
@@ -937,7 +977,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
     for ad_id, ad in today_ads.items():
         if not SCALE_CBO_AD_ENABLED:
             break
-        if not (_is_scale_campaign(ad["campaign_name"])):
+        if not (_is_scale_campaign(ad["campaign_name"]) or _is_cbo_campaign(ad["campaign_name"])):
             continue
 
         info = ad_info.get(ad_id, {})
@@ -965,23 +1005,33 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         as_spend = adset_data.get("spend", 0)
         as_roas = adset_data.get("roas", 0)
 
-        expensive_atc = atcs > 0 and cost_per_atc > SCALE_CBO_AD_CPA_ATC_THRESHOLD
-        weak_roas = roas < SCALE_CBO_AD_ROAS_THRESHOLD
+        peer_cpc, peer_cpa = _peer_baselines(ad["adset_id"], ad_id)
+
         adset_underperforming = as_roas < SCALE_CBO_AD_ADSET_ROAS_GATE
-        # Funnel feeder — cheap clicks that convert to ATCs. Never pause
-        # these on low ROAS — they're doing upstream work for the campaign
-        # (cheap engagement that other ads convert). Restart branch still
-        # runs so a funnel feeder that got paused earlier can come back.
+        cpc_expensive_vs_peers = (
+            peer_cpc > 0
+            and cpc_link > 0
+            and cpc_link > peer_cpc * SCALE_CBO_AD_PEER_CPC_MULT
+        )
+        atc_expensive_vs_peers = (
+            atcs > 0
+            and peer_cpa > 0
+            and cost_per_atc > peer_cpa * SCALE_CBO_AD_PEER_CPA_MULT
+        )
+        # If ad has 0 ATCs, only CPC can fire the pause.
+        if atcs == 0:
+            expensive_vs_peers = cpc_expensive_vs_peers
+        else:
+            expensive_vs_peers = cpc_expensive_vs_peers or atc_expensive_vs_peers
+
+        # Absolute funnel-feeder skip: cheap CPC + ATCs > 0 -> upstream work.
         funnel_feeder = (
             atcs > 0
             and cpc_link > 0
             and cpc_link <= SCALE_CBO_AD_CHEAP_CPC_PROTECT
         )
 
-        # Spend-hog branch (fires below the $150 primary threshold):
-        # Cheap-click ad taking > 50% of an underperforming adset's spend
-        # with weak conversion metrics. Kills the whale that's soaking up
-        # budget on engagement but not converting, so budget redistributes.
+        # Spend-hog branch (currently disabled by default flag).
         spend_hog_fires = False
         if (SCALE_CBO_AD_SPEND_HOG_ENABLED
             and spend > SCALE_CBO_AD_SPEND_HOG_MIN_SPEND
@@ -990,31 +1040,31 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             and link_clicks > 0
             and cpc_link < SCALE_CBO_AD_SPEND_HOG_CPC
             and as_roas < SCALE_CBO_AD_SPEND_HOG_ADSET_ROAS
-            and (weak_roas or expensive_atc)):
+            and (roas < SCALE_CBO_AD_ROAS_THRESHOLD
+                 or (atcs > 0 and cost_per_atc > SCALE_CBO_AD_CPA_ATC_THRESHOLD))):
             spend_hog_fires = True
 
         if not spend_hog_fires and spend <= SCALE_CBO_AD_SPEND_THRESHOLD:
             continue
 
-        # PAUSE — either the primary $100 rule + adset gate, or the
-        # spend-hog branch (already fully qualified above).
-        # Primary needs BOTH weak ROAS AND expensive ATCs (a profitable
-        # ad with expensive ATCs still survives — killing a 2.3x-ROAS
-        # ad for early-funnel cost is counter-productive).
+        # PAUSE — spend > $50 & adset underperforming & expensive vs peers,
+        # unless the ad is a funnel feeder (cheap absolute CPC + ATCs).
         primary_fires = (
             SCALE_CBO_AD_PRIMARY_ENABLED
             and spend > SCALE_CBO_AD_SPEND_THRESHOLD
-            and weak_roas
-            and expensive_atc
             and adset_underperforming
-            and not funnel_feeder
+            and expensive_vs_peers
         )
-        if status == "ACTIVE" and (primary_fires or (spend_hog_fires and not funnel_feeder)):
+        if status == "ACTIVE" and (primary_fires or spend_hog_fires) and not funnel_feeder:
             reason_bits = []
-            if weak_roas:
-                reason_bits.append(f"ROAS {roas:.2f}<{SCALE_CBO_AD_ROAS_THRESHOLD}")
-            if expensive_atc:
-                reason_bits.append(f"CPA/ATC ${cost_per_atc:.2f}>${SCALE_CBO_AD_CPA_ATC_THRESHOLD:.0f}")
+            if cpc_expensive_vs_peers:
+                mult = cpc_link / peer_cpc if peer_cpc > 0 else 0
+                reason_bits.append(f"CPC ${cpc_link:.2f}={mult:.2f}x peer ${peer_cpc:.2f}")
+            if atc_expensive_vs_peers:
+                mult = cost_per_atc / peer_cpa if peer_cpa > 0 else 0
+                reason_bits.append(f"CPA/ATC ${cost_per_atc:.2f}={mult:.2f}x peer ${peer_cpa:.2f}")
+            if atcs == 0 and cpc_expensive_vs_peers:
+                reason_bits.append("0 ATCs")
             reason_bits.append(f"adset ROAS {as_roas:.2f}<{SCALE_CBO_AD_ADSET_ROAS_GATE}")
             if spend_hog_fires:
                 share = spend / as_spend if as_spend > 0 else 0
@@ -1027,11 +1077,11 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 if success:
                     action = "paused"
                     scale_cbo_ad_stop += 1
-                    logger.info(f"SCALE AD STOP: Paused {ad_id} ({current_ad_name}) — spend ${spend:.2f}, {', '.join(reason_bits)}, {purchases}p")
+                    logger.info(f"SCALE/CBO AD STOP: Paused {ad_id} ({current_ad_name}) — spend ${spend:.2f}, {', '.join(reason_bits)}, {purchases}p")
                 else:
                     action = "failed"
                     scale_cbo_ad_fail += 1
-                    logger.warning(f"SCALE AD STOP: Failed to pause {ad_id}: {reason}")
+                    logger.warning(f"SCALE/CBO AD STOP: Failed to pause {ad_id}: {reason}")
 
             actions.append(StopLossAction(
                 ad_id=ad_id, ad_name=current_ad_name,
@@ -1042,12 +1092,18 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART: BOTH the adset recovered (>= 1.6) AND the ad itself
-        # would no longer trigger pause (ROAS healthy + ATC cost healthy).
-        ad_healthy = (
-            roas >= SCALE_CBO_AD_ROAS_THRESHOLD
-            and (atcs == 0 or cost_per_atc <= SCALE_CBO_AD_CPA_ATC_THRESHOLD)
+        # RESTART: adset recovered AND ad no longer expensive vs peers.
+        cpc_healthy = (
+            peer_cpc == 0
+            or cpc_link == 0
+            or cpc_link <= peer_cpc * SCALE_CBO_AD_PEER_CPC_MULT
         )
+        atc_healthy = (
+            atcs == 0
+            or peer_cpa == 0
+            or cost_per_atc <= peer_cpa * SCALE_CBO_AD_PEER_CPA_MULT
+        )
+        ad_healthy = cpc_healthy and atc_healthy
         adset_recovered = as_roas >= SCALE_CBO_AD_ADSET_ROAS_GATE
         if status == "PAUSED" and ad_healthy and adset_recovered:
 
@@ -1183,7 +1239,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         f"ADSET (TESTING): {testing_stop} paused, {testing_restart} activated, {testing_fail} failed │ "
         f"ADSET (CBO): {cbo_stop} paused, {cbo_restart} activated, {cbo_fail} failed │ "
         f"AD (CBO MIK/LED): {cbo_ad_stop} paused, {cbo_ad_restart} activated, {cbo_ad_fail} failed │ "
-        f"AD (SCALE): {scale_cbo_ad_stop} paused, {scale_cbo_ad_restart} activated, {scale_cbo_ad_fail} failed"
+        f"AD (SCALE+CBO): {scale_cbo_ad_stop} paused, {scale_cbo_ad_restart} activated, {scale_cbo_ad_fail} failed"
     )
     return actions, adset_actions
 
@@ -1236,9 +1292,9 @@ def build_stop_loss_slack_message(
             f"_TESTING adset: {('ON — early: spend>$'+str(int(TESTING_ADSET_EARLY_SPEND))+' & 0p & CPA/ATC>$'+str(int(TESTING_ADSET_EARLY_CPA_ATC))+' | ceiling: spend>$'+str(int(TESTING_ADSET_CEILING_SPEND))+' & ROAS<'+str(TESTING_ADSET_CEILING_ROAS)) if TESTING_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_TESTING ad (7d): {'ON' if TESTING_AD_7D_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_CBO adset: {'ON — stop spend>$'+str(int(CBO_ADSET_SPEND_THRESHOLD))+' & ROAS<'+str(CBO_ADSET_ROAS_THRESHOLD)+', restart mirror' if CBO_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
-            f"_SCALE ad: {'ON' if SCALE_CBO_AD_ENABLED else 'PAUSED (flag off)'}"
-            f" — primary(\\$100/adset): {'ON' if SCALE_CBO_AD_PRIMARY_ENABLED else 'off'}"
-            f", spend-hog(>50% share, CPC<\\$1): {'ON' if SCALE_CBO_AD_SPEND_HOG_ENABLED else 'off'}"
+            f"_SCALE+CBO ad (peer-relative): {'ON' if SCALE_CBO_AD_ENABLED else 'PAUSED (flag off)'}"
+            f" — spend>\\${int(SCALE_CBO_AD_SPEND_THRESHOLD)} & adset ROAS<{SCALE_CBO_AD_ADSET_ROAS_GATE} & (CPC>{SCALE_CBO_AD_PEER_CPC_MULT}x peer OR (ATCs>0 & CPA/ATC>{SCALE_CBO_AD_PEER_CPA_MULT}x peer))"
+            f", peer=adset ads spend>\\${int(SCALE_CBO_AD_PEER_MIN_SPEND)}"
             f", funnel-feeder skip: CPC<=\\${SCALE_CBO_AD_CHEAP_CPC_PROTECT} & ATCs>0_\n"
             f"_CBO ad (per adset keyword) stop/restart: " + " | ".join(
                 f"{kw} spend>${int(t)} & ROAS{{<,>=}}{CBO_AD_ROAS_THRESHOLD}"
