@@ -23,7 +23,7 @@ Rules:
     restart: PAUSED + spend>$50 & adset ROAS>=1.6
              & CPC not expensive vs peers
              & (ATCs==0 OR CPA/ATC not expensive vs peers)
-    peers:   other ads in same adset with today spend > $20
+    peers:   other ads in same adset with today spend > $50
     (skip RUN/OFF in ad name, OFF in adset name)
     (funnel-feeder skip: link CPC<=$1 & ATCs>0 -> keep running)
 - CBO ads (today's metrics, per adset-name keyword):
@@ -128,7 +128,7 @@ CBO_AD_KEYWORD_SPEND_THRESHOLDS: dict[str, float] = {
 SCALE_CBO_AD_ENABLED = True
 SCALE_CBO_AD_PRIMARY_ENABLED = True
 SCALE_CBO_AD_SPEND_THRESHOLD = 50.0
-SCALE_CBO_AD_PEER_MIN_SPEND = 20.0    # ads included in the peer baseline
+SCALE_CBO_AD_PEER_MIN_SPEND = 50.0    # ads included in the peer baseline
 SCALE_CBO_AD_PEER_CPC_MULT = 1.75     # CPC > mult * peer avg -> expensive
 SCALE_CBO_AD_PEER_CPA_MULT = 1.75     # CPA/ATC > mult * peer avg -> expensive
 SCALE_CBO_AD_ADSET_ROAS_GATE = 1.6
