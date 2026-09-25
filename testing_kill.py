@@ -10,8 +10,8 @@ PAUSE ad IF:
 - Ad is currently ACTIVE
 - NOT (ATCs > 0 AND CPA/ATC < $6)    ← cheap-ATC protection floor
 - AND either branch matches:
-    A) DEAD:       30d spend > $50  AND  (0 ATCs OR 0 purchases)
-    B) EFFICIENCY: 30d spend > $50  AND  $6 <= CPA/ATC < $10  AND  (0 purchases OR ROAS < 1.6)
+    A) DEAD:       30d spend > $100  AND  (0 ATCs OR 0 purchases)
+    B) EFFICIENCY: 30d spend > $100  AND  $6 <= CPA/ATC < $10  AND  (0 purchases OR ROAS < 1.6)
 """
 
 import logging
@@ -30,8 +30,8 @@ AEST = timezone(timedelta(hours=10))
 
 # Flip TESTING_KILL_ENABLED to True to re-enable the hourly 30d kill.
 TESTING_KILL_ENABLED = True
-DEAD_SPEND_THRESHOLD = 50.0        # spend > $50 & (0 ATCs OR 0 purchases)
-EFFICIENCY_SPEND_THRESHOLD = 50.0  # spend > $50 & CPA/ATC < $10 & (0 purchases OR ROAS < 1.6)
+DEAD_SPEND_THRESHOLD = 100.0        # spend > $100 & (0 ATCs OR 0 purchases)
+EFFICIENCY_SPEND_THRESHOLD = 100.0  # spend > $100 & CPA/ATC < $10 & (0 purchases OR ROAS < 1.6)
 CHEAP_ATC_THRESHOLD = 10.0         # "cheap ATCs" cutoff for EFFICIENCY branch
 # Cheap-ATC protection floor: ads with ATCs > 0 & CPA/ATC < $6 are exempt
 # from both kill branches — sub-$6 ATCs are strong enough audience signal

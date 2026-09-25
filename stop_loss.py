@@ -66,22 +66,22 @@ SCALE_ADSET_ROAS_THRESHOLD = 1.6
 # Flip TESTING_ADSET_ENABLED to True to re-enable.
 TESTING_ADSET_ENABLED = True
 # Two pause branches:
-#   Early:   spend > $30 & 0 purchases & CPA/ATC > $8
+#   Early:   spend > $60 & 0 purchases & CPA/ATC > $8
 #            (kills expensive-ATC-no-convert bleed fast)
-#   Ceiling: spend > $50 & ROAS < 1.8
-#            (above $50 the cheap-ATC protection expires — ROAS must
-#             be >= 1.8 or it pauses, regardless of ATC cost. A 0p
+#   Ceiling: spend > $100 & ROAS < 1.6
+#            (above $100 the cheap-ATC protection expires — ROAS must
+#             be >= 1.6 or it pauses, regardless of ATC cost. A 0p
 #             adset has ROAS 0 so this also catches funnel-broken cases.)
-# Restart mirror: spend > $30 & ROAS >= 1.8 & purchases > 0.
-TESTING_ADSET_EARLY_SPEND = 30.0
+# Restart mirror: spend > $60 & ROAS >= 1.6 & purchases > 0.
+TESTING_ADSET_EARLY_SPEND = 60.0
 TESTING_ADSET_EARLY_CPA_ATC = 8.0
-TESTING_ADSET_CEILING_SPEND = 50.0
-TESTING_ADSET_CEILING_ROAS = 1.8
+TESTING_ADSET_CEILING_SPEND = 100.0
+TESTING_ADSET_CEILING_ROAS = 1.6
 
 # TESTING campaigns — ad-level rule (rolling 7d metrics)
 # Flip TESTING_AD_7D_ENABLED to True to re-enable.
 TESTING_AD_7D_ENABLED = True
-TESTING_AD_SPEND_THRESHOLD_7D = 30.0
+TESTING_AD_SPEND_THRESHOLD_7D = 80.0
 TESTING_AD_ROAS_THRESHOLD_7D = 1.6
 # Unconditional protection: if CPA/ATC < $6 the ad keeps running
 # regardless of spend or ROAS. Sub-$6 ATCs are strong enough audience
