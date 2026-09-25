@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 AEST = timezone(timedelta(hours=10))
 
 # Flip AUTO_PAUSE_RULE_ENABLED to True to re-enable the daily low-spend kill.
-AUTO_PAUSE_RULE_ENABLED = True
+AUTO_PAUSE_RULE_ENABLED = False
 SPEND_THRESHOLD = 10.0
 LOOKBACK_DAYS = 7
 MIN_AD_AGE_DAYS = 7
