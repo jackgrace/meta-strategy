@@ -19,7 +19,7 @@ Rules:
     restart: PAUSED + spend>$1000 & ROAS>=1.4
 - SCALE + CBO ads (today's metrics, peer-relative):
     stop:    ACTIVE + spend>$50 & adset ROAS<1.6
-             & (CPC>1.25x peer avg OR (ATCs>0 & CPA/ATC>1.25x peer avg))
+             & (CPC>1.75x peer avg OR (ATCs>0 & CPA/ATC>1.75x peer avg))
     restart: PAUSED + spend>$50 & adset ROAS>=1.6
              & CPC not expensive vs peers
              & (ATCs==0 OR CPA/ATC not expensive vs peers)
@@ -129,8 +129,8 @@ SCALE_CBO_AD_ENABLED = True
 SCALE_CBO_AD_PRIMARY_ENABLED = True
 SCALE_CBO_AD_SPEND_THRESHOLD = 50.0
 SCALE_CBO_AD_PEER_MIN_SPEND = 20.0    # ads included in the peer baseline
-SCALE_CBO_AD_PEER_CPC_MULT = 1.25     # CPC > mult * peer avg -> expensive
-SCALE_CBO_AD_PEER_CPA_MULT = 1.25     # CPA/ATC > mult * peer avg -> expensive
+SCALE_CBO_AD_PEER_CPC_MULT = 1.75     # CPC > mult * peer avg -> expensive
+SCALE_CBO_AD_PEER_CPA_MULT = 1.75     # CPA/ATC > mult * peer avg -> expensive
 SCALE_CBO_AD_ADSET_ROAS_GATE = 1.6
 # Legacy absolute thresholds — no longer used by the primary pause but
 # retained for the (disabled) spend-hog branch.
