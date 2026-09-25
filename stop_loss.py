@@ -3,8 +3,8 @@ Intra-day stop-loss. Runs every 15 min.
 
 Rules:
 - SCALE adsets (today's metrics):
-    stop:    ACTIVE + spend>$500 & ROAS<1.4
-    restart: PAUSED + spend>$500 & ROAS>=1.4 (intra-day if ROAS improves)
+    stop:    ACTIVE + spend>$500 & ROAS<1.6
+    restart: PAUSED + spend>$500 & ROAS>=1.6 (intra-day if ROAS improves)
     (skip adsets with OFF in name; midnight is the primary recovery path)
 - TESTING adsets (today's metrics, two pause branches):
     early:   ACTIVE + spend>$30 & 0p & CPA/ATC>$8
@@ -15,14 +15,14 @@ Rules:
              (unconditional — no spend/ROAS ceiling on cheap-ATC ads)
     restart: PAUSED + spend>$30 & ROAS>=1.6 & purchases>0
 - CBO adsets (today's metrics):
-    stop:    ACTIVE + spend>$500 & ROAS<1.4
-    restart: PAUSED + spend>$500 & ROAS>=1.4
+    stop:    ACTIVE + spend>$500 & ROAS<1.6
+    restart: PAUSED + spend>$500 & ROAS>=1.6
 - SCALE + CBO ads (today's metrics, adset-gated):
-    gate:    adset spend>$250 & adset ROAS<1.6
-    ad gate: ad ROAS<1.6
+    gate:    adset spend>$250 & adset ROAS<1.8
+    ad gate: ad ROAS<1.8
     branch A: ad spend>$60 & ATCs>0 & CPA/ATC>$8 -> pause
     branch B: ad spend>$120 (any CPA/ATC) -> pause  (grace-then-cut)
-    restart: PAUSED + adset ROAS>=1.6 & ad ROAS>=1.6
+    restart: PAUSED + adset ROAS>=1.6 & ad ROAS>=1.8  (adset hysteresis)
     (skip RUN/OFF in ad name, OFF in adset name)
 - CBO ads (today's metrics, per adset-name keyword):
     MIK adsets: ad spend>$80  & ROAS<2.0 → pause / mirror restart
@@ -54,13 +54,13 @@ STOP_CPA_ATC_THRESHOLD = 10.0  # cost per ATC above this — expensive ATCs = pa
 RESTART_ROAS_THRESHOLD = 1.6
 
 # SCALE — adset-level rule (today's metrics).
-#   Pause:   ACTIVE + spend > $500 & ROAS < 1.4
-#   Restart: PAUSED + spend > $500 & ROAS >= 1.4
+#   Pause:   ACTIVE + spend > $500 & ROAS < 1.6
+#   Restart: PAUSED + spend > $500 & ROAS >= 1.6
 # Matches campaigns whose name contains SCALE as a whole word only.
 # Flip SCALE_ADSET_ENABLED to False to pause the rule without deleting it.
 SCALE_ADSET_ENABLED = True
 SCALE_ADSET_SPEND_THRESHOLD = 500.0
-SCALE_ADSET_ROAS_THRESHOLD = 1.4
+SCALE_ADSET_ROAS_THRESHOLD = 1.6
 
 # TESTING campaigns — adset-level rule (today's metrics)
 # Flip TESTING_ADSET_ENABLED to True to re-enable.
@@ -89,12 +89,12 @@ TESTING_AD_ROAS_THRESHOLD_7D = 1.6
 TESTING_AD_CHEAP_ATC_PROTECT = 6.0
 
 # CBO campaigns — adset-level rule (today's metrics).
-#   Pause:   ACTIVE + spend > $500 & ROAS < 1.4
-#   Restart: PAUSED + spend > $500 & ROAS >= 1.4
+#   Pause:   ACTIVE + spend > $500 & ROAS < 1.6
+#   Restart: PAUSED + spend > $500 & ROAS >= 1.6
 # Flip CBO_ADSET_ENABLED to False to pause the rule without deleting it.
 CBO_ADSET_ENABLED = True
 CBO_ADSET_SPEND_THRESHOLD = 500.0
-CBO_ADSET_ROAS_THRESHOLD = 1.4
+CBO_ADSET_ROAS_THRESHOLD = 1.6
 
 # CBO ad-level rules (today's metrics), keyed by adset-name keyword.
 # Only ads whose parent adset name contains one of these keywords are
@@ -110,16 +110,18 @@ CBO_AD_KEYWORD_SPEND_THRESHOLDS: dict[str, float] = {
 # SCALE/CBO ad-level intra-day rule (today's metrics).
 # Ad in a SCALE or CBO campaign; parent adset not OFF; ad not RUN/OFF.
 # Adset gate — the rule only fires inside an already-underperforming adset:
-#   adset spend > $250  AND  adset ROAS < 1.6
-# With the gate open, and ad ROAS < 1.6, one of two branches pauses:
+#   adset spend > $250  AND  adset ROAS < 1.8
+# With the gate open, and ad ROAS < 1.8, one of two branches pauses:
 #   A) Expensive-ATC branch:  ad spend > $60 & ATCs > 0 & CPA/ATC > $8
 #   B) Grace-then-cut branch: ad spend > $120 (regardless of CPA/ATC)
-# Restart mirror: PAUSED + adset ROAS >= 1.6 AND ad ROAS >= 1.6.
+# Restart mirror: PAUSED + adset ROAS >= 1.6 AND ad ROAS >= 1.8
+# (adset side has 1.6/1.8 hysteresis to avoid flapping right at the pause line).
 SCALE_CBO_AD_ENABLED = True
 SCALE_CBO_AD_PRIMARY_ENABLED = True
 SCALE_CBO_AD_ADSET_SPEND_GATE = 250.0    # adset spend gate (rule only fires above)
-SCALE_CBO_AD_ADSET_ROAS_GATE = 1.6       # adset ROAS gate
-SCALE_CBO_AD_ROAS_THRESHOLD = 1.6        # ad ROAS gate (ad ROAS >= this -> never pause)
+SCALE_CBO_AD_ADSET_ROAS_GATE = 1.8       # adset ROAS gate for PAUSE
+SCALE_CBO_AD_ADSET_ROAS_RESTART = 1.6    # adset ROAS gate for RESTART (hysteresis)
+SCALE_CBO_AD_ROAS_THRESHOLD = 1.8        # ad ROAS gate (ad ROAS >= this -> never pause)
 SCALE_CBO_AD_SPEND_THRESHOLD = 60.0      # branch A spend floor
 SCALE_CBO_AD_SPEND_THRESHOLD_GRACE = 120.0  # branch B spend floor (grace-then-cut)
 SCALE_CBO_AD_CPA_ATC_THRESHOLD = 8.0     # branch A CPA/ATC threshold
@@ -132,7 +134,7 @@ SCALE_CBO_AD_CHEAP_CPC_PROTECT = 1.0     # legacy, unused by primary rule
 #   Adset ROAS < 1.5
 #   Ad spend / adset spend > 50%
 #   Ad CPC (link) < $1
-#   Ad ROAS < 1.4 OR (ATCs > 0 & CPA/ATC > $8)
+#   Ad ROAS < 1.6 OR (ATCs > 0 & CPA/ATC > $8)
 #   → pause
 SCALE_CBO_AD_SPEND_HOG_ENABLED = False
 SCALE_CBO_AD_SPEND_HOG_MIN_SPEND = 50.0    # floor so tiny adsets aren't touched
@@ -564,8 +566,8 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
 
     # === SCALE adset-level stop-loss / restart (today's metrics) ===
     # Single rule:
-    #   Pause:   ACTIVE + spend > $500 & ROAS < 1.4
-    #   Restart: PAUSED + spend > $500 & ROAS >= 1.4
+    #   Pause:   ACTIVE + spend > $500 & ROAS < 1.6
+    #   Restart: PAUSED + spend > $500 & ROAS >= 1.6
     scale_stop = 0
     scale_restart = 0
     scale_fail = 0
@@ -584,7 +586,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         if "OFF" in current_name.upper():
             continue
 
-        # STOP: ACTIVE + spend > $500 + ROAS < 1.4
+        # STOP: ACTIVE + spend > $500 + ROAS < 1.6
         if (status == "ACTIVE"
             and spend > SCALE_ADSET_SPEND_THRESHOLD
             and roas < SCALE_ADSET_ROAS_THRESHOLD):
@@ -615,7 +617,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART: PAUSED + spend > $500 + ROAS >= 1.4
+        # RESTART: PAUSED + spend > $500 + ROAS >= 1.6
         if (status == "PAUSED"
             and spend > SCALE_ADSET_SPEND_THRESHOLD
             and roas >= SCALE_ADSET_ROAS_THRESHOLD):
@@ -765,7 +767,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         if "OFF" in current_name.upper():
             continue
 
-        # STOP-LOSS: ACTIVE + spend > $500 + ROAS < 1.4
+        # STOP-LOSS: ACTIVE + spend > $500 + ROAS < 1.6
         if (status == "ACTIVE"
             and spend > CBO_ADSET_SPEND_THRESHOLD
             and roas < CBO_ADSET_ROAS_THRESHOLD):
@@ -796,7 +798,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART: PAUSED + spend > $500 + ROAS >= 1.4
+        # RESTART: PAUSED + spend > $500 + ROAS >= 1.6
         if (status == "PAUSED"
             and spend > CBO_ADSET_SPEND_THRESHOLD
             and roas >= CBO_ADSET_ROAS_THRESHOLD):
@@ -927,8 +929,8 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
 
     # === SCALE + CBO ad-level stop-loss / restart (today's, adset-gated) ===
-    # Adset gate: adset spend > $250 & adset ROAS < 1.6.
-    # Ad ROAS gate: ad ROAS < 1.6.
+    # Adset gate: adset spend > $250 & adset ROAS < 1.8.
+    # Ad ROAS gate: ad ROAS < 1.8.
     # Branch A: ad spend > $60 & ATCs > 0 & CPA/ATC > $8 -> pause
     # Branch B: ad spend > $120 (any CPA/ATC) -> pause
     scale_cbo_ad_stop = 0
@@ -1017,9 +1019,9 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART — adset recovered AND ad ROAS recovered.
+        # RESTART — adset recovered (>= 1.6 hysteresis) AND ad ROAS >= 1.8.
         if (status == "PAUSED"
-            and as_roas >= SCALE_CBO_AD_ADSET_ROAS_GATE
+            and as_roas >= SCALE_CBO_AD_ADSET_ROAS_RESTART
             and ad_roas_recovered):
 
             if dry_run:
