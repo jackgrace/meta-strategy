@@ -120,8 +120,8 @@ CBO_AD_KEYWORD_SPEND_THRESHOLDS: dict[str, float] = {
 #            & ATCs > 0 & CPA/ATC > 1.75 * peer avg CPA/ATC
 #   Restart: PAUSED + spend > $50 & adset ROAS >= 1.6
 #            & (ATCs == 0 OR CPA/ATC not expensive vs peers)
-SCALE_CBO_AD_ENABLED = True
-SCALE_CBO_AD_PRIMARY_ENABLED = True
+SCALE_CBO_AD_ENABLED = False
+SCALE_CBO_AD_PRIMARY_ENABLED = False
 SCALE_CBO_AD_SPEND_THRESHOLD = 50.0
 SCALE_CBO_AD_PEER_MIN_SPEND = 50.0    # ads included in the peer baseline
 SCALE_CBO_AD_PEER_CPA_MULT = 1.75     # CPA/ATC > mult * peer avg -> expensive
