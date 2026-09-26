@@ -51,7 +51,8 @@ def _fetch_testing_adsets_7d(config: Config) -> dict[str, dict]:
         "limit": 200,
         "filtering": (
             '[{"field":"impressions","operator":"GREATER_THAN","value":"0"},'
-            '{"field":"campaign.name","operator":"CONTAIN","value":"TESTING"}]'
+            '{"field":"campaign.name","operator":"CONTAIN","value":"TESTING"},'
+            '{"field":"adset.name","operator":"NOT_CONTAIN","value":"OFF"}]'
         ),
     }
     adsets: dict[str, dict] = {}
