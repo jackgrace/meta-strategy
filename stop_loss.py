@@ -10,7 +10,7 @@ Rules:
     early:   ACTIVE + spend>$50 & 0p & (0 ATCs+checkouts OR cost/ATC>$10)
              (protected if ATCs>=3 & CPA/ATC<$6)
     roas:    ACTIVE + spend>max($100, 30% of daily budget) & ROAS<1.6
-    restart: PAUSED + spend>roas threshold & ROAS>=1.6 & purchases>0
+    restart: PAUSED + spend>$50 & ROAS>=1.6 & purchases>0
 - TESTING ads intra-day cull (today's metrics):
     fast:    ACTIVE + spend>$40 & (0 ATCs OR CPA/ATC>$8)
     late:    ACTIVE + spend>$80 & (ROAS<1.6 OR 0p)
@@ -73,8 +73,7 @@ SCALE_ADSET_ROAS_THRESHOLD = 1.5
 #     funnel event = ATC, or checkout if the adset has 0 ATCs (LPs that
 #     skip the cart). Protected if ATCs >= 3 & CPA/ATC < $6.
 #   ROAS check: spend > max($100, 30% of daily budget) & ROAS < 1.6
-#   Restart:    PAUSED + spend > ROAS-check threshold & ROAS >= 1.6 & purchases > 0
-#   (early-killed adsets come back via midnight restart)
+#   Restart:    PAUSED + spend > $50 & ROAS >= 1.6 & purchases > 0
 TESTING_ADSET_ENABLED = True
 TESTING_ADSET_EARLY_SPEND = 50.0
 TESTING_ADSET_EARLY_COST_PER_EVENT = 10.0
@@ -758,9 +757,11 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART: requires actual purchases so we don't yo-yo on noise.
+        # RESTART: a purchase clears the early kill and ROAS >= 1.6 clears the
+        # ROAS check. Floor at the early-kill spend, since a paused adset
+        # can't spend its way up to the ROAS-check threshold.
         if (status == "PAUSED"
-            and spend > threshold
+            and spend > TESTING_ADSET_EARLY_SPEND
             and roas >= TESTING_ADSET_ROAS
             and purchases > 0):
 
