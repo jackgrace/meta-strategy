@@ -28,6 +28,7 @@ from main import (
     run_midnight_restart,
     run_ad_kill_3d,
     run_cbo_ad_kill_3d,
+    run_testing_retire,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._run_ad_kill_3d_endpoint(source="http")
         elif self.path == "/cbo-ad-kill-3d":
             self._run_cbo_ad_kill_3d_endpoint(source="http")
+        elif self.path == "/testing-retire":
+            self._run_testing_retire_endpoint(source="http")
         else:
             self._respond(404, {"error": "not found"})
 
@@ -165,6 +168,15 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(200, result)
         except Exception as e:
             logger.error(f"Ad kill 3d failed: {e}")
+            self._respond(500, {"status": "error", "message": str(e)})
+
+    def _run_testing_retire_endpoint(self, source: str):
+        logger.info(f"Manual trigger via {source} — testing retire")
+        try:
+            result = run_testing_retire()
+            self._respond(200, result)
+        except Exception as e:
+            logger.error(f"Testing retire failed: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
 
     def _run_cbo_ad_kill_3d_endpoint(self, source: str):
@@ -468,6 +480,14 @@ def _run_midnight_restart_scheduler():
         wait_seconds = (next_run - now).total_seconds()
         logger.info(f"Midnight-restart scheduler: next run at {next_run.isoformat()} ({wait_seconds:.0f}s from now)")
         time.sleep(wait_seconds)
+
+        # Retire chronic TESTING losers first so the restart below skips them.
+        try:
+            logger.info("Scheduler: running 12:05am AEST testing retire")
+            run_testing_retire()
+        except Exception as e:
+            logger.error(f"Testing retire failed: {e}")
+            _send_stop_loss_failure(f"testing-retire: {type(e).__name__}: {e}")
 
         try:
             logger.info("Scheduler: running 12:05am AEST midnight restart")
