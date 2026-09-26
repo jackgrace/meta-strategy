@@ -128,8 +128,8 @@ CBO_AD_KEYWORD_SPEND_THRESHOLDS: dict[str, float] = {
 #   B) Grace-then-cut branch: ad spend > $120 (regardless of CPA/ATC)
 # Restart mirror: PAUSED + adset ROAS >= 1.6 AND ad ROAS >= 1.8
 # (adset side has 1.6/1.8 hysteresis to avoid flapping right at the pause line).
-SCALE_CBO_AD_ENABLED = True
-SCALE_CBO_AD_PRIMARY_ENABLED = True
+SCALE_CBO_AD_ENABLED = False
+SCALE_CBO_AD_PRIMARY_ENABLED = False
 SCALE_CBO_AD_ADSET_SPEND_GATE = 250.0    # adset spend gate (rule only fires above)
 SCALE_CBO_AD_ADSET_ROAS_GATE = 1.8       # adset ROAS gate for PAUSE
 SCALE_CBO_AD_ADSET_ROAS_RESTART = 1.6    # adset ROAS gate for RESTART (hysteresis)
