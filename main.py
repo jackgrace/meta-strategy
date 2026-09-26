@@ -36,6 +36,7 @@ from testing_retire import (
     run_testing_retire as _run_testing_retire,
     send_testing_retire_report,
 )
+from testing_surf import run_surf_reset as _run_surf_reset, send_surf_reset_report
 from slack_reporter import send_testing_missed_opps, send_early_fatigue_report
 
 logging.basicConfig(
@@ -198,6 +199,24 @@ def run_testing_retire() -> dict:
             "account": config.meta_ad_account_id,
             "retired": sum(1 for a in actions if a.action in ("retired", "paused (rename failed)")),
             "would_retire": sum(1 for a in actions if a.action == "would_retire"),
+            "failed": sum(1 for a in actions if a.action == "failed"),
+        })
+    return {"status": "ok", "mode": mode, "per_account": per_account}
+
+
+def run_surf_reset() -> dict:
+    """Daily 12:05am: reset TESTING adset budgets above $250 back to $250."""
+    dry_run = _dry_run()
+    mode = "DRY RUN" if dry_run else "LIVE"
+    per_account = []
+    for config in _per_account_configs():
+        logger.info(f"--- Surf reset: account {config.meta_ad_account_id} ---")
+        actions = _run_surf_reset(config, dry_run=dry_run)
+        send_surf_reset_report(actions, dry_run, config)
+        per_account.append({
+            "account": config.meta_ad_account_id,
+            "reset": sum(1 for a in actions if a.action == "reset"),
+            "would_reset": sum(1 for a in actions if a.action == "would_reset"),
             "failed": sum(1 for a in actions if a.action == "failed"),
         })
     return {"status": "ok", "mode": mode, "per_account": per_account}

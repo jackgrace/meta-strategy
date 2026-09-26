@@ -11,6 +11,9 @@ Rules:
              (protected if ATCs>=3 & CPA/ATC<$6)
     roas:    ACTIVE + spend>max($100, 30% of daily budget) & ROAS<1.6
     restart: PAUSED + spend>$50 & ROAS>=1.6 & purchases>0
+- TESTING surf scaling (today's metrics, adsets at >= $250 budget):
+    each time spend >= 50% of daily budget & ROAS >= 2.0 → double budget (cap $2000)
+    (testing_surf.py resets budgets above $250 back to $250 at midnight)
 - TESTING ads intra-day cull (today's metrics):
     fast:    ACTIVE + spend>$40 & (0 ATCs OR CPA/ATC>$8)
     late:    ACTIVE + spend>$80 & (ROAS<1.6 OR 0p)
@@ -96,6 +99,17 @@ TESTING_AD_CULL_FAST_CPA_ATC = 8.0
 TESTING_AD_CULL_LATE_SPEND = 80.0
 TESTING_AD_CULL_LATE_ROAS = 1.6
 TESTING_AD_CULL_CHEAP_ATC_PROTECT = 6.0
+
+# TESTING surf scaling (intra-day). Each time an ACTIVE testing adset has
+# spent 50% of its current daily budget at ROAS >= 2.0, double the budget
+# (capped). Only adsets already at the $250 base surf, so $50 new tests are
+# left alone. testing_surf.py resets anything above $250 back to $250 at
+# midnight.
+TESTING_SURF_ENABLED = True
+TESTING_SURF_BASE_BUDGET = 250.0
+TESTING_SURF_SPEND_SHARE = 0.5
+TESTING_SURF_MIN_ROAS = 2.0
+TESTING_SURF_MAX_BUDGET = 2000.0
 
 # TESTING campaigns — ad-level rule (rolling 7d metrics)
 # Flip TESTING_AD_7D_ENABLED to True to re-enable.
@@ -458,6 +472,25 @@ def _compute_campaign_roas(ads: dict) -> dict:
     }
 
 
+def _update_adset_budget(config: Config, adset_id: str, dollars: float) -> tuple[bool, str]:
+    """Set an adset's daily budget (Meta takes minor units, i.e. cents)."""
+    try:
+        resp = requests.post(
+            f"{API_BASE}/{adset_id}?access_token={config.meta_access_token}",
+            data={"daily_budget": str(int(round(dollars * 100)))},
+            timeout=60,
+        )
+    except requests.RequestException as e:
+        return False, str(e)[:200]
+    if resp.ok:
+        return True, "ok"
+    try:
+        err = resp.json().get("error", {})
+        return False, err.get("error_user_msg") or err.get("message", "Unknown")
+    except ValueError:
+        return False, f"HTTP {resp.status_code}"
+
+
 def _update_ad_status(config: Config, ad_id: str, new_status: str) -> tuple[bool, str]:
     """Send status update to Meta with retry. Returns (success, reason_or_message)."""
     url = f"{API_BASE}/{ad_id}"
@@ -789,6 +822,63 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 roas=roas,
                 purchases=purchases,
             ))
+
+    # === TESTING surf scaling (today's metrics) ===
+    testing_surf = 0
+    testing_surf_fail = 0
+
+    for adset_id in testing_adset_ids:
+        if not TESTING_SURF_ENABLED:
+            break
+        if adset_id in testing_adsets_paused_now:
+            continue
+        info = adset_info.get(adset_id, {})
+        if info.get("status") != "ACTIVE":
+            continue
+        current_name = info.get("name", adset_meta[adset_id]["adset_name"])
+        if "OFF" in current_name.upper():
+            continue
+
+        budget = info.get("daily_budget_dollars", 0) or 0
+        if budget < TESTING_SURF_BASE_BUDGET or budget >= TESTING_SURF_MAX_BUDGET:
+            continue
+
+        data = adset_roas.get(adset_id, {})
+        spend = data.get("spend", 0)
+        roas = data.get("roas", 0)
+        if spend < budget * TESTING_SURF_SPEND_SHARE or roas < TESTING_SURF_MIN_ROAS:
+            continue
+
+        new_budget = min(budget * 2, TESTING_SURF_MAX_BUDGET)
+        why = (
+            f"budget ${budget:.0f} → ${new_budget:.0f} "
+            f"(spend ${spend:.2f} = {spend / budget:.0%} of budget, ROAS {roas:.2f})"
+        )
+        if dry_run:
+            action, reason = "would_scale", f"dry run ({why})"
+        else:
+            ok, err = _update_adset_budget(config, adset_id, new_budget)
+            if ok:
+                action, reason = "scaled", why
+                testing_surf += 1
+                info["daily_budget_dollars"] = new_budget
+                logger.info(f"TESTING SURF: {adset_id} ({current_name}) {why}")
+            else:
+                action, reason = "failed", f"budget update: {err}"
+                testing_surf_fail += 1
+                logger.warning(f"TESTING SURF: failed to scale {adset_id}: {err}")
+
+        adset_actions.append(AdsetAction(
+            adset_id=adset_id,
+            adset_name=current_name,
+            campaign_name=adset_meta[adset_id]["campaign_name"],
+            action=action,
+            reason=reason,
+            spend=spend,
+            revenue=data.get("revenue", 0),
+            roas=roas,
+            purchases=adset_purchases.get(adset_id, 0),
+        ))
 
     # === TESTING ad-level intra-day cull (today's metrics) ===
     testing_cull_stop = 0
@@ -1287,6 +1377,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         f"ADSET (SCALE): {scale_stop} paused, {scale_restart} activated, {scale_fail} failed │ "
         f"ADSET (TESTING): {testing_stop} paused, {testing_restart} activated, {testing_fail} failed │ "
         f"AD (TESTING cull): {testing_cull_stop} paused, {testing_cull_fail} failed │ "
+        f"ADSET (TESTING surf): {testing_surf} scaled, {testing_surf_fail} failed │ "
         f"ADSET (CBO): {cbo_stop} paused, {cbo_restart} activated, {cbo_fail} failed │ "
         f"AD (CBO MIK/LED): {cbo_ad_stop} paused, {cbo_ad_restart} activated, {cbo_ad_fail} failed │ "
         f"AD (SCALE+CBO): {scale_cbo_ad_stop} paused, {scale_cbo_ad_restart} activated, {scale_cbo_ad_fail} failed"
@@ -1313,8 +1404,9 @@ def build_stop_loss_slack_message(
     as_paused = [a for a in adset_actions if a.action in ("paused", "would_pause")]
     as_activated = [a for a in adset_actions if a.action in ("activated", "would_activate")]
     as_failed = [a for a in adset_actions if a.action == "failed"]
+    as_scaled = [a for a in adset_actions if a.action in ("scaled", "would_scale")]
 
-    if not (ad_paused or ad_activated or ad_failed or as_paused or as_activated or as_failed):
+    if not (ad_paused or ad_activated or ad_failed or as_paused or as_activated or as_failed or as_scaled):
         return None
 
     blocks = []
@@ -1331,6 +1423,8 @@ def build_stop_loss_slack_message(
         summary_parts.append(f"🔴 {ad_total_p} paused")
     if ad_total_a:
         summary_parts.append(f"🟢 {ad_total_a} activated")
+    if as_scaled:
+        summary_parts.append(f"📈 {len(as_scaled)} scaled")
     if ad_total_f:
         summary_parts.append(f"⚠️ {ad_total_f} failed")
 
@@ -1341,6 +1435,7 @@ def build_stop_loss_slack_message(
             f"_SCALE adset: {'ON — stop spend>$'+str(int(SCALE_ADSET_SPEND_THRESHOLD))+' & ROAS<'+str(SCALE_ADSET_ROAS_THRESHOLD)+', restart mirror' if SCALE_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_TESTING adset: {('ON — early: spend>$'+str(int(TESTING_ADSET_EARLY_SPEND))+' & 0p & (0 ATCs/checkouts OR cost/ATC>$'+str(int(TESTING_ADSET_EARLY_COST_PER_EVENT))+') | ROAS check: spend>max($'+str(int(TESTING_ADSET_CEILING_MIN_SPEND))+', '+str(int(TESTING_ADSET_CEILING_BUDGET_SHARE*100))+'% budget) & ROAS<'+str(TESTING_ADSET_ROAS)) if TESTING_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_TESTING ad cull: {('ON — fast: spend>$'+str(int(TESTING_AD_CULL_FAST_SPEND))+' & (0 ATCs OR CPA/ATC>$'+str(int(TESTING_AD_CULL_FAST_CPA_ATC))+') | late: spend>$'+str(int(TESTING_AD_CULL_LATE_SPEND))+' & (ROAS<'+str(TESTING_AD_CULL_LATE_ROAS)+' OR 0p) | protect CPA/ATC<$'+str(int(TESTING_AD_CULL_CHEAP_ATC_PROTECT))+' | never last ad') if TESTING_AD_CULL_ENABLED else 'PAUSED (flag off)'}_\n"
+            f"_TESTING surf: {('ON — spend>='+str(int(TESTING_SURF_SPEND_SHARE*100))+'% of budget & ROAS>='+str(TESTING_SURF_MIN_ROAS)+' → 2x budget (cap $'+str(int(TESTING_SURF_MAX_BUDGET))+'), reset to $'+str(int(TESTING_SURF_BASE_BUDGET))+' at midnight') if TESTING_SURF_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_TESTING ad (7d): {'ON' if TESTING_AD_7D_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_CBO adset: {'ON — stop spend>$'+str(int(CBO_ADSET_SPEND_THRESHOLD))+' & ROAS<'+str(CBO_ADSET_ROAS_THRESHOLD)+', restart mirror' if CBO_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_SCALE+CBO ad: {'ON' if SCALE_CBO_AD_ENABLED else 'PAUSED (flag off)'}"
@@ -1400,6 +1495,7 @@ def build_stop_loss_slack_message(
 
     _add_section("🔴 *Adsets paused (stop-loss)*", as_paused, lambda a: _format_adset(a, "🔴"))
     _add_section("🟢 *Adsets activated (restart)*", as_activated, lambda a: _format_adset(a, "🟢"))
+    _add_section("📈 *Adsets scaled (surf)*", as_scaled, lambda a: _format_adset(a, "📈") + f"\n_{a.reason}_")
     _add_section("🔴 *Ads paused (stop-loss)*", ad_paused, lambda a: _format_ad(a, "🔴"))
     _add_section("🟢 *Ads activated (restart)*", ad_activated, lambda a: _format_ad(a, "🟢"))
 
