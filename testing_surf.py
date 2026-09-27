@@ -18,7 +18,7 @@ from stop_loss import TESTING_SURF_BASE_BUDGET, _update_adset_budget
 
 logger = logging.getLogger(__name__)
 
-TESTING_SURF_RESET_ENABLED = True
+TESTING_SURF_RESET_ENABLED = False
 
 
 @dataclass

@@ -77,7 +77,7 @@ SCALE_ADSET_ROAS_THRESHOLD = 1.5
 #     skip the cart). Protected if ATCs >= 3 & CPA/ATC < $6.
 #   ROAS check: spend > max($100, 30% of daily budget) & ROAS < 1.6
 #   Restart:    PAUSED + spend > $50 & ROAS >= 1.6 & purchases > 0
-TESTING_ADSET_ENABLED = True
+TESTING_ADSET_ENABLED = False
 TESTING_ADSET_EARLY_SPEND = 50.0
 TESTING_ADSET_EARLY_COST_PER_EVENT = 10.0
 TESTING_ADSET_PROTECT_MIN_ATCS = 3
@@ -93,7 +93,7 @@ TESTING_ADSET_ROAS = 1.6
 #   Later cut: ad spend > $80 & (ROAS < 1.6 OR 0 purchases)
 #   Protect:   ATCs > 0 & CPA/ATC < $6 -> never culled
 #   Never pauses the last active ad in an adset (adset rule owns that call).
-TESTING_AD_CULL_ENABLED = True
+TESTING_AD_CULL_ENABLED = False
 TESTING_AD_CULL_FAST_SPEND = 40.0
 TESTING_AD_CULL_FAST_CPA_ATC = 8.0
 TESTING_AD_CULL_LATE_SPEND = 80.0
@@ -105,7 +105,7 @@ TESTING_AD_CULL_CHEAP_ATC_PROTECT = 6.0
 # (capped). Only adsets already at the $250 base surf, so $50 new tests are
 # left alone. testing_surf.py resets anything above $250 back to $250 at
 # midnight.
-TESTING_SURF_ENABLED = True
+TESTING_SURF_ENABLED = False
 TESTING_SURF_BASE_BUDGET = 250.0
 TESTING_SURF_SPEND_SHARE = 0.5
 TESTING_SURF_MIN_ROAS = 2.0
@@ -113,7 +113,7 @@ TESTING_SURF_MAX_BUDGET = 2000.0
 
 # TESTING campaigns — ad-level rule (rolling 7d metrics)
 # Flip TESTING_AD_7D_ENABLED to True to re-enable.
-TESTING_AD_7D_ENABLED = True
+TESTING_AD_7D_ENABLED = False
 TESTING_AD_SPEND_THRESHOLD_7D = 80.0
 TESTING_AD_ROAS_THRESHOLD_7D = 1.6
 # Unconditional protection: if CPA/ATC < $6 the ad keeps running

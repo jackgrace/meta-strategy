@@ -23,7 +23,7 @@ from stop_loss import _update_ad_status
 
 logger = logging.getLogger(__name__)
 
-TESTING_RETIRE_ENABLED = True
+TESTING_RETIRE_ENABLED = False
 RETIRE_SPEND_THRESHOLD = 250.0
 RETIRE_ROAS_THRESHOLD = 1.4
 
