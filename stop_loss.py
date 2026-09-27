@@ -3,8 +3,8 @@ Intra-day stop-loss. Runs every 15 min.
 
 Rules:
 - SCALE adsets (today's metrics):
-    stop:    ACTIVE + spend>$500 & ROAS<1.5
-    restart: PAUSED + spend>$500 & ROAS>=1.5 (intra-day if ROAS improves)
+    stop:    ACTIVE + spend>$1000 & ROAS<1.4
+    restart: PAUSED + spend>$1000 & ROAS>=1.4 (intra-day if ROAS improves)
     (skip adsets with OFF in name; midnight is the primary recovery path)
 - TESTING adsets (today's metrics):
     early:   ACTIVE + spend>$50 & 0p & (0 ATCs+checkouts OR cost/ATC>$10)
@@ -63,13 +63,13 @@ STOP_CPA_ATC_THRESHOLD = 10.0  # cost per ATC above this — expensive ATCs = pa
 RESTART_ROAS_THRESHOLD = 1.6
 
 # SCALE — adset-level rule (today's metrics).
-#   Pause:   ACTIVE + spend > $500 & ROAS < 1.5
-#   Restart: PAUSED + spend > $500 & ROAS >= 1.5
+#   Pause:   ACTIVE + spend > $1000 & ROAS < 1.4
+#   Restart: PAUSED + spend > $1000 & ROAS >= 1.4
 # Matches campaigns whose name contains SCALE as a whole word only.
 # Flip SCALE_ADSET_ENABLED to False to pause the rule without deleting it.
 SCALE_ADSET_ENABLED = True
-SCALE_ADSET_SPEND_THRESHOLD = 500.0
-SCALE_ADSET_ROAS_THRESHOLD = 1.5
+SCALE_ADSET_SPEND_THRESHOLD = 1000.0
+SCALE_ADSET_ROAS_THRESHOLD = 1.4
 
 # TESTING campaigns — adset-level rule (today's metrics).
 #   Early kill: spend > $50 & 0 purchases & (no funnel events OR cost/event > $10)
@@ -624,8 +624,8 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
 
     # === SCALE adset-level stop-loss / restart (today's metrics) ===
     # Single rule:
-    #   Pause:   ACTIVE + spend > $500 & ROAS < 1.5
-    #   Restart: PAUSED + spend > $500 & ROAS >= 1.5
+    #   Pause:   ACTIVE + spend > $1000 & ROAS < 1.4
+    #   Restart: PAUSED + spend > $1000 & ROAS >= 1.4
     scale_stop = 0
     scale_restart = 0
     scale_fail = 0
@@ -644,7 +644,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         if "OFF" in current_name.upper():
             continue
 
-        # STOP: ACTIVE + spend > $500 + ROAS < 1.5
+        # STOP: ACTIVE + spend > $1000 + ROAS < 1.4
         if (status == "ACTIVE"
             and spend > SCALE_ADSET_SPEND_THRESHOLD
             and roas < SCALE_ADSET_ROAS_THRESHOLD):
@@ -675,7 +675,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART: PAUSED + spend > $500 + ROAS >= 1.5
+        # RESTART: PAUSED + spend > $1000 + ROAS >= 1.4
         if (status == "PAUSED"
             and spend > SCALE_ADSET_SPEND_THRESHOLD
             and roas >= SCALE_ADSET_ROAS_THRESHOLD):
