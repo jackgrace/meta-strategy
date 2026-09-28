@@ -10,7 +10,7 @@ Rules:
     early:   ACTIVE + spend>$50 & 0p & (0 ATCs+checkouts OR cost/ATC>$10)
              (protected if ATCs>=3 & CPA/ATC<$6)
     roas:    ACTIVE + spend>max($100, 20% of daily budget) & ROAS<1.6
-    restart: PAUSED + spend>$50 & ROAS>=1.6 & purchases>0
+    restart: PAUSED + spend>$50 & neither early nor roas check fires
 - TESTING surf scaling (today's metrics, adsets at >= $250 budget):
     each time spend >= 50% of daily budget & ROAS >= 2.0 → double budget (cap $2000)
     (testing_surf.py resets budgets above $250 back to $250 at midnight)
@@ -76,7 +76,7 @@ SCALE_ADSET_ROAS_THRESHOLD = 1.4
 #     funnel event = ATC, or checkout if the adset has 0 ATCs (LPs that
 #     skip the cart). Protected if ATCs >= 3 & CPA/ATC < $6.
 #   ROAS check: spend > max($100, 20% of daily budget) & ROAS < 1.6
-#   Restart:    PAUSED + spend > $50 & ROAS >= 1.6 & purchases > 0
+#   Restart:    PAUSED + spend > $50 & neither check above would pause it
 TESTING_ADSET_ENABLED = True
 TESTING_ADSET_EARLY_SPEND = 50.0
 TESTING_ADSET_EARLY_COST_PER_EVENT = 10.0
@@ -790,13 +790,12 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART: a purchase clears the early kill and ROAS >= 1.6 clears the
-        # ROAS check. Floor at the early-kill spend, since a paused adset
-        # can't spend its way up to the ROAS-check threshold.
+        # RESTART: exact mirror of the pause — once neither check would fire
+        # on today's numbers (late ATCs or a late purchase), bring it back.
         if (status == "PAUSED"
             and spend > TESTING_ADSET_EARLY_SPEND
-            and roas >= TESTING_ADSET_ROAS
-            and purchases > 0):
+            and not early_pause
+            and not ceiling_pause):
 
             if dry_run:
                 action, reason = "would_activate", "dry run"
