@@ -24,8 +24,9 @@ Rules:
              (unconditional — no spend/ROAS ceiling on cheap-ATC ads)
     restart: PAUSED + spend>$30 & ROAS>=1.6 & purchases>0
 - CBO adsets (today's metrics):
-    stop:    ACTIVE + spend>$500 & ROAS<1.5
-    restart: PAUSED + spend>$500 & ROAS>=1.5
+    atc:      ACTIVE + spend>$250 & (0 ATCs OR cost/ATC>$10)
+    purchase: ACTIVE + spend>$500 & (0p OR cost/purchase>$80)
+    restart:  PAUSED + spend>$250 & neither check fires
 - SCALE + CBO ads (today's metrics, adset-gated):
     gate:    adset spend>$250 & adset ROAS<1.8
     ad gate: ad ROAS<1.8
@@ -122,13 +123,16 @@ TESTING_AD_ROAS_THRESHOLD_7D = 1.6
 # signal that we let ASC keep testing conversion at its own pace.
 TESTING_AD_CHEAP_ATC_PROTECT = 6.0
 
-# CBO campaigns — adset-level rule (today's metrics).
-#   Pause:   ACTIVE + spend > $500 & ROAS < 1.5
-#   Restart: PAUSED + spend > $500 & ROAS >= 1.5
+# CBO campaigns — adset-level rule (today's metrics). Pause if either:
+#   ATC check:      spend > $250 & (0 ATCs OR cost/ATC > $10)
+#   Purchase check: spend > $500 & (0 purchases OR cost/purchase > $80)
+# Restart: PAUSED + spend > $250 & neither check would pause it.
 # Flip CBO_ADSET_ENABLED to False to pause the rule without deleting it.
 CBO_ADSET_ENABLED = True
-CBO_ADSET_SPEND_THRESHOLD = 500.0
-CBO_ADSET_ROAS_THRESHOLD = 1.5
+CBO_ADSET_ATC_SPEND = 250.0
+CBO_ADSET_MAX_CPA_ATC = 10.0
+CBO_ADSET_PURCHASE_SPEND = 500.0
+CBO_ADSET_MAX_CPP = 80.0
 
 # CBO ad-level rules (today's metrics), keyed by adset-name keyword.
 # Only ads whose parent adset name contains one of these keywords are
@@ -990,19 +994,33 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         if "OFF" in current_name.upper():
             continue
 
-        # STOP-LOSS: ACTIVE + spend > $500 + ROAS < 1.5
-        if (status == "ACTIVE"
-            and spend > CBO_ADSET_SPEND_THRESHOLD
-            and roas < CBO_ADSET_ROAS_THRESHOLD):
+        atcs = data.get("atcs", 0)
+        cost_per_atc = spend / atcs if atcs > 0 else 0
+        cost_per_purchase = spend / purchases if purchases > 0 else 0
+        atc_pause = (
+            spend > CBO_ADSET_ATC_SPEND
+            and (atcs == 0 or cost_per_atc > CBO_ADSET_MAX_CPA_ATC)
+        )
+        purchase_pause = (
+            spend > CBO_ADSET_PURCHASE_SPEND
+            and (purchases == 0 or cost_per_purchase > CBO_ADSET_MAX_CPP)
+        )
 
+        if status == "ACTIVE" and (atc_pause or purchase_pause):
+            bits = []
+            if atc_pause:
+                bits.append("0 ATCs" if atcs == 0 else f"cost/ATC ${cost_per_atc:.2f}>${CBO_ADSET_MAX_CPA_ATC:.0f}")
+            if purchase_pause:
+                bits.append("0 purchases" if purchases == 0 else f"cost/purchase ${cost_per_purchase:.2f}>${CBO_ADSET_MAX_CPP:.0f}")
+            why = f"spend ${spend:.2f} & " + " & ".join(bits)
             if dry_run:
-                action, reason = "would_pause", "dry run"
+                action, reason = "would_pause", f"dry run ({why})"
             else:
                 success, reason = _update_ad_status(config, adset_id, "PAUSED")
                 if success:
-                    action = "paused"
+                    action, reason = "paused", why
                     cbo_stop += 1
-                    logger.info(f"CBO ADSET STOP: Paused {adset_id} ({current_name}) — spend ${spend:.2f}, ROAS {roas:.2f}")
+                    logger.info(f"CBO ADSET STOP: Paused {adset_id} ({current_name}) — {why}, ROAS {roas:.2f}")
                 else:
                     action = "failed"
                     cbo_fail += 1
@@ -1021,10 +1039,11 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART: PAUSED + spend > $500 + ROAS >= 1.5
+        # RESTART: mirror — neither check would pause it on today's numbers.
         if (status == "PAUSED"
-            and spend > CBO_ADSET_SPEND_THRESHOLD
-            and roas >= CBO_ADSET_ROAS_THRESHOLD):
+            and spend > CBO_ADSET_ATC_SPEND
+            and not atc_pause
+            and not purchase_pause):
 
             if dry_run:
                 action, reason = "would_activate", "dry run"
@@ -1438,7 +1457,7 @@ def build_stop_loss_slack_message(
             f"_TESTING ad cull: {('ON — fast: spend>$'+str(int(TESTING_AD_CULL_FAST_SPEND))+' & (0 ATCs OR CPA/ATC>$'+str(int(TESTING_AD_CULL_FAST_CPA_ATC))+') | late: spend>$'+str(int(TESTING_AD_CULL_LATE_SPEND))+' & (ROAS<'+str(TESTING_AD_CULL_LATE_ROAS)+' OR 0p) | protect CPA/ATC<$'+str(int(TESTING_AD_CULL_CHEAP_ATC_PROTECT))+' | never last ad') if TESTING_AD_CULL_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_TESTING surf: {('ON — spend>='+str(int(TESTING_SURF_SPEND_SHARE*100))+'% of budget & ROAS>='+str(TESTING_SURF_MIN_ROAS)+' → 2x budget (cap $'+str(int(TESTING_SURF_MAX_BUDGET))+'), reset to $'+str(int(TESTING_SURF_BASE_BUDGET))+' at midnight') if TESTING_SURF_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_TESTING ad (7d): {'ON' if TESTING_AD_7D_ENABLED else 'PAUSED (flag off)'}_\n"
-            f"_CBO adset: {'ON — stop spend>$'+str(int(CBO_ADSET_SPEND_THRESHOLD))+' & ROAS<'+str(CBO_ADSET_ROAS_THRESHOLD)+', restart mirror' if CBO_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
+            f"_CBO adset: {('ON — spend>$'+str(int(CBO_ADSET_ATC_SPEND))+' & (0 ATCs OR cost/ATC>$'+str(int(CBO_ADSET_MAX_CPA_ATC))+') | spend>$'+str(int(CBO_ADSET_PURCHASE_SPEND))+' & (0p OR cost/purchase>$'+str(int(CBO_ADSET_MAX_CPP))+'), restart mirror') if CBO_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_SCALE+CBO ad: {'ON' if SCALE_CBO_AD_ENABLED else 'PAUSED (flag off)'}"
             f" — gate: adset spend>\\${int(SCALE_CBO_AD_ADSET_SPEND_GATE)} & adset ROAS<{SCALE_CBO_AD_ADSET_ROAS_GATE} & ad ROAS<{SCALE_CBO_AD_ROAS_THRESHOLD};"
             f" A) spend>\\${int(SCALE_CBO_AD_SPEND_THRESHOLD)} & CPA/ATC>\\${int(SCALE_CBO_AD_CPA_ATC_THRESHOLD)}"
