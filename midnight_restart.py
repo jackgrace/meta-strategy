@@ -36,6 +36,8 @@ AEST = timezone(timedelta(hours=10))
 
 MIN_YESTERDAY_CAMPAIGN_SPEND = 1.0            # adset rule
 MIN_YESTERDAY_CAMPAIGN_SPEND_ADS = 5.0        # ad rule
+# Paused ads in TESTING campaigns stay paused (adset-level restart unaffected).
+MIDNIGHT_SKIP_TESTING_ADS = True
 
 # Campaigns whose name matches ALL keywords in any tuple below bypass the
 # "spent > $1 yesterday" gate — their adsets can still restart at midnight
@@ -357,6 +359,7 @@ def run_midnight_restart(config: Config, dry_run: bool = False) -> tuple[list[Mi
     failed = 0
     skipped_off = 0
     skipped_wrong_campaign = 0
+    skipped_testing = 0
 
     for adset in paused_adsets:
         cid = adset["campaign_id"]
@@ -454,7 +457,7 @@ def _run_ad_level_midnight(config: Config, campaign_spend: dict, dry_run: bool) 
     - Parent campaign ACTIVE + had spend > $5 yesterday
     - Ad name does NOT contain 'OFF'
     - Ad currently PAUSED
-    (No campaign-keyword filter — any campaign counts.)
+    - Campaign name does NOT contain TESTING (MIDNIGHT_SKIP_TESTING_ADS)
     """
     # Any campaign that spent yesterday qualifies — no keyword filter.
     qualifying_ids = {
@@ -496,6 +499,9 @@ def _run_ad_level_midnight(config: Config, campaign_spend: dict, dry_run: bool) 
             continue
 
         campaign_name = campaign_statuses.get(cid, {}).get("name", "Unknown")
+        if MIDNIGHT_SKIP_TESTING_ADS and "TESTING" in campaign_name.upper():
+            skipped_testing += 1
+            continue
         yesterday_spend = campaign_spend.get(cid, {}).get("spend", 0)
 
         if dry_run:
@@ -538,7 +544,7 @@ def _run_ad_level_midnight(config: Config, campaign_spend: dict, dry_run: bool) 
 
     logger.info(
         f"Midnight AD restart complete: {activated} activated │ "
-        f"{failed} failed │ {skipped_off} skipped OFF │ "
+        f"{failed} failed │ {skipped_off} skipped OFF │ {skipped_testing} skipped TESTING │ "
         f"{skipped_wrong_campaign} skipped (campaign not qualifying)"
     )
     return actions
