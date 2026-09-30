@@ -128,7 +128,7 @@ TESTING_AD_CHEAP_ATC_PROTECT = 6.0
 #   Purchase check: spend > $500 & (0 purchases OR cost/purchase > $80)
 # Restart: PAUSED + spend > $250 & neither check would pause it.
 # Flip CBO_ADSET_ENABLED to False to pause the rule without deleting it.
-CBO_ADSET_ENABLED = True
+CBO_ADSET_ENABLED = False
 CBO_ADSET_ATC_SPEND = 250.0
 CBO_ADSET_MAX_CPA_ATC = 10.0
 CBO_ADSET_PURCHASE_SPEND = 500.0
@@ -585,12 +585,15 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         if not ad["adset_id"]:
             continue
         campaign_name = ad["campaign_name"]
-        if CBO_ADSET_ENABLED and _is_cbo_campaign(campaign_name):
-            cbo_adset_ids.add(ad["adset_id"])
-            adset_meta[ad["adset_id"]] = {
-                "adset_name": ad["adset_name"],
-                "campaign_name": campaign_name,
-            }
+        # CBO campaigns never fall through to the SCALE rule, even when the
+        # CBO rule is off ("SCALE | CBO | ..." stays unmanaged at adset level).
+        if _is_cbo_campaign(campaign_name):
+            if CBO_ADSET_ENABLED:
+                cbo_adset_ids.add(ad["adset_id"])
+                adset_meta[ad["adset_id"]] = {
+                    "adset_name": ad["adset_name"],
+                    "campaign_name": campaign_name,
+                }
         elif SCALE_ADSET_ENABLED and _is_scale_campaign(campaign_name):
             scale_adset_ids.add(ad["adset_id"])
             adset_meta[ad["adset_id"]] = {
