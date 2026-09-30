@@ -359,7 +359,6 @@ def run_midnight_restart(config: Config, dry_run: bool = False) -> tuple[list[Mi
     failed = 0
     skipped_off = 0
     skipped_wrong_campaign = 0
-    skipped_testing = 0
 
     for adset in paused_adsets:
         cid = adset["campaign_id"]
@@ -487,6 +486,7 @@ def _run_ad_level_midnight(config: Config, campaign_spend: dict, dry_run: bool) 
     failed = 0
     skipped_off = 0
     skipped_wrong_campaign = 0
+    skipped_testing = 0
 
     for ad in paused_ads:
         cid = ad["campaign_id"]
