@@ -68,7 +68,7 @@ RESTART_ROAS_THRESHOLD = 1.6
 #   Restart: PAUSED + spend > $1000 & ROAS >= 1.2
 # Matches campaigns whose name contains SCALE as a whole word only.
 # Flip SCALE_ADSET_ENABLED to False to pause the rule without deleting it.
-SCALE_ADSET_ENABLED = False
+SCALE_ADSET_ENABLED = True
 SCALE_ADSET_SPEND_THRESHOLD = 1000.0
 SCALE_ADSET_ROAS_THRESHOLD = 1.2
 
