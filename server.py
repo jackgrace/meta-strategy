@@ -30,6 +30,7 @@ from main import (
     run_cbo_ad_kill_3d,
     run_testing_retire,
     run_surf_reset,
+    run_scale_retire,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._run_testing_retire_endpoint(source="http")
         elif self.path == "/surf-reset":
             self._run_surf_reset_endpoint(source="http")
+        elif self.path == "/scale-retire":
+            self._run_scale_retire_endpoint(source="http")
         else:
             self._respond(404, {"error": "not found"})
 
@@ -171,6 +174,15 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(200, result)
         except Exception as e:
             logger.error(f"Ad kill 3d failed: {e}")
+            self._respond(500, {"status": "error", "message": str(e)})
+
+    def _run_scale_retire_endpoint(self, source: str):
+        logger.info(f"Manual trigger via {source} — scale retire")
+        try:
+            result = run_scale_retire()
+            self._respond(200, result)
+        except Exception as e:
+            logger.error(f"Scale retire failed: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
 
     def _run_surf_reset_endpoint(self, source: str):
@@ -500,6 +512,13 @@ def _run_midnight_restart_scheduler():
         except Exception as e:
             logger.error(f"Testing retire failed: {e}")
             _send_stop_loss_failure(f"testing-retire: {type(e).__name__}: {e}")
+
+        try:
+            logger.info("Scheduler: running 12:05am AEST scale retire")
+            run_scale_retire()
+        except Exception as e:
+            logger.error(f"Scale retire failed: {e}")
+            _send_stop_loss_failure(f"scale-retire: {type(e).__name__}: {e}")
 
         try:
             logger.info("Scheduler: running 12:05am AEST surf reset")

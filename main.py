@@ -37,6 +37,7 @@ from testing_retire import (
     send_testing_retire_report,
 )
 from testing_surf import run_surf_reset as _run_surf_reset, send_surf_reset_report
+from scale_retire import run_scale_retire as _run_scale_retire, send_scale_retire_report
 from slack_reporter import send_testing_missed_opps, send_early_fatigue_report
 
 logging.basicConfig(
@@ -217,6 +218,25 @@ def run_surf_reset() -> dict:
             "account": config.meta_ad_account_id,
             "reset": sum(1 for a in actions if a.action == "reset"),
             "would_reset": sum(1 for a in actions if a.action == "would_reset"),
+            "failed": sum(1 for a in actions if a.action == "failed"),
+        })
+    return {"status": "ok", "mode": mode, "per_account": per_account}
+
+
+def run_scale_retire() -> dict:
+    """Daily 12:05am: retire SCALE ads with 7d spend > $1000 & ROAS < 1.2."""
+    dry_run = _dry_run()
+    mode = "DRY RUN" if dry_run else "LIVE"
+    per_account = []
+    for config in _per_account_configs():
+        logger.info(f"--- Scale-retire: account {config.meta_ad_account_id} ---")
+        actions = _run_scale_retire(config, dry_run=dry_run)
+        send_scale_retire_report(actions, dry_run, config)
+        per_account.append({
+            "account": config.meta_ad_account_id,
+            "retired": sum(1 for a in actions if a.action in ("retired", "paused (rename failed)")),
+            "would_retire": sum(1 for a in actions if a.action == "would_retire"),
+            "protected": sum(1 for a in actions if a.action == "protected"),
             "failed": sum(1 for a in actions if a.action == "failed"),
         })
     return {"status": "ok", "mode": mode, "per_account": per_account}
