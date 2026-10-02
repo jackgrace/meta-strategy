@@ -9,7 +9,7 @@ Rules:
 - TESTING adsets (today's metrics):
     early (OFF): ACTIVE + spend>$50 & 0p & (0 ATCs+checkouts OR cost/ATC>$10)
              (protected if ATCs>=3 & CPA/ATC<$6)
-    roas:    ACTIVE + spend>max($100, 20% of daily budget) & ROAS<1.6
+    roas:    ACTIVE + spend>max($100, 20% of daily budget) & ROAS<1.4
     restart: PAUSED + spend>$50 & neither early nor roas check fires
 - TESTING surf scaling (today's metrics, adsets at >= $250 budget):
     each time spend >= 50% of daily budget & ROAS >= 2.0 → double budget (cap $2000)
@@ -75,7 +75,7 @@ SCALE_ADSET_ROAS_THRESHOLD = 1.2
 #   Early kill (OFF, TESTING_ADSET_EARLY_ENABLED): spend > $50 & 0 purchases & (no funnel events OR cost/event > $10)
 #     funnel event = ATC, or checkout if the adset has 0 ATCs (LPs that
 #     skip the cart). Protected if ATCs >= 3 & CPA/ATC < $6.
-#   ROAS check: spend > max($100, 20% of daily budget) & ROAS < 1.6
+#   ROAS check: spend > max($100, 20% of daily budget) & ROAS < 1.4
 #   Restart:    PAUSED + spend > $50 & neither check above would pause it
 TESTING_ADSET_ENABLED = True
 TESTING_ADSET_EARLY_ENABLED = False
@@ -85,7 +85,7 @@ TESTING_ADSET_PROTECT_MIN_ATCS = 3
 TESTING_ADSET_PROTECT_CPA_ATC = 6.0
 TESTING_ADSET_CEILING_MIN_SPEND = 100.0
 TESTING_ADSET_CEILING_BUDGET_SHARE = 0.2
-TESTING_ADSET_ROAS = 1.6
+TESTING_ADSET_ROAS = 1.4
 
 # TESTING campaigns — ad-level intra-day cull (today's metrics). Culls the
 # losers inside a testing adset so budget flows to the winner. Soft pause:
