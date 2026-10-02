@@ -3,10 +3,9 @@ SCALE ad 7-day retire. Runs daily at 12:05am AEST, before the midnight
 restart, so a retired ad isn't switched straight back on.
 
 Rule (last 7 complete days), campaigns with SCALE in the name (incl. SCALE | CBO):
-- ad 7d spend > $1000 AND ad 7d ROAS < 1.2
+- ad 7d spend > $300 AND ad 7d ROAS < 1.2 AND adset 7d ROAS < 1.2
+- ad created at least 7 days ago
 - ad and adset names don't contain OFF or RUN
-- protected: adset 7d ROAS >= 1.6 AND the ad is one of the adset's top 3
-  spenders over 7 days (a good adset's main spenders are left alone)
 - never retires the last active ad in an adset
 → pause ad + append " - OFF" (midnight restart skips it).
 """
@@ -14,6 +13,7 @@ Rule (last 7 complete days), campaigns with SCALE in the name (incl. SCALE | CBO
 import logging
 import time
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 
 import requests
@@ -26,10 +26,10 @@ from testing_retire import _rename
 logger = logging.getLogger(__name__)
 
 SCALE_RETIRE_ENABLED = True
-RETIRE_SPEND_THRESHOLD = 1000.0
+RETIRE_SPEND_THRESHOLD = 300.0
 RETIRE_ROAS_THRESHOLD = 1.2
-PROTECT_ADSET_ROAS = 1.6
-PROTECT_TOP_N = 3
+RETIRE_ADSET_ROAS_THRESHOLD = 1.2
+MIN_AD_AGE_DAYS = 7
 
 
 @dataclass
@@ -130,14 +130,14 @@ def run_scale_retire(config: Config, dry_run: bool = False) -> list[ScaleRetireA
         by_adset[a["adset_id"]].append(ad_id)
         adset_spend[a["adset_id"]] += a["spend"]
         adset_rev[a["adset_id"]] += a["revenue"]
-    rank: dict[str, int] = {}
-    for adset_id, ids in by_adset.items():
-        for i, ad_id in enumerate(sorted(ids, key=lambda x: -ads[x]["spend"]), start=1):
-            rank[ad_id] = i
+    def adset_roas(adset_id: str) -> float:
+        return adset_rev[adset_id] / adset_spend[adset_id] if adset_spend[adset_id] > 0 else 0
 
     candidates = [
         ad_id for ad_id, a in ads.items()
-        if a["spend"] > RETIRE_SPEND_THRESHOLD and a["roas"] < RETIRE_ROAS_THRESHOLD
+        if a["spend"] > RETIRE_SPEND_THRESHOLD
+        and a["roas"] < RETIRE_ROAS_THRESHOLD
+        and adset_roas(a["adset_id"]) < RETIRE_ADSET_ROAS_THRESHOLD
     ]
     if not candidates:
         return []
@@ -161,20 +161,21 @@ def run_scale_retire(config: Config, dry_run: bool = False) -> list[ScaleRetireA
             continue
         if status in ("DELETED", "ARCHIVED"):
             continue
+        try:
+            created = datetime.fromisoformat(ad_info.get("created_time", ""))
+        except ValueError:
+            continue
+        if datetime.now(timezone.utc) - created < timedelta(days=MIN_AD_AGE_DAYS):
+            continue
 
         adset_id = a["adset_id"]
-        as_roas = adset_rev[adset_id] / adset_spend[adset_id] if adset_spend[adset_id] > 0 else 0
+        as_roas = adset_roas(adset_id)
         act = ScaleRetireAction(
             ad_id=ad_id, ad_name=name, adset_name=adset_name, campaign_name=a["campaign_name"],
             spend_7d=a["spend"], roas_7d=a["roas"], purchases_7d=a["purchases"],
             adset_roas_7d=as_roas, action="would_retire",
         )
 
-        if as_roas >= PROTECT_ADSET_ROAS and rank[ad_id] <= PROTECT_TOP_N:
-            act.action = "protected"
-            act.reason = f"#{rank[ad_id]} spender in adset at {as_roas:.2f}x"
-            actions.append(act)
-            continue
         if status == "ACTIVE" and active_per_adset[adset_id] <= 1:
             act.action = "protected"
             act.reason = "last active ad in adset"
@@ -217,8 +218,8 @@ def send_scale_retire_report(actions: list[ScaleRetireAction], dry_run: bool, co
     blocks = [
         {"type": "header", "text": {"type": "plain_text", "text": f"🪦 SCALE ads retired (7d) — {len(retired)}"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": (
-            f"*[{mode}]* 7d spend > ${RETIRE_SPEND_THRESHOLD:,.0f} & 7d ROAS < {RETIRE_ROAS_THRESHOLD} → pause + mark OFF. "
-            f"Top {PROTECT_TOP_N} spenders protected when adset 7d ROAS ≥ {PROTECT_ADSET_ROAS}. "
+            f"*[{mode}]* Ad 7d spend > ${RETIRE_SPEND_THRESHOLD:,.0f} & ad 7d ROAS < {RETIRE_ROAS_THRESHOLD} "
+            f"& adset 7d ROAS < {RETIRE_ADSET_ROAS_THRESHOLD} & ad ≥ {MIN_AD_AGE_DAYS} days old → pause + mark OFF. "
             f"Remove OFF from the name to bring one back."
         )}]},
     ]
