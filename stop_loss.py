@@ -33,6 +33,9 @@ Rules:
     branch B: ad spend>$120 (any CPA/ATC) -> pause  (grace-then-cut)
     restart: PAUSED + adset ROAS>=1.6 & ad ROAS>=1.8  (adset hysteresis)
     (skip RUN/OFF in ad name, OFF in adset name)
+- SCALE + CBO ad bad day (today's metrics):
+    pause:   ad spend>$200 & ad ROAS<1.2 & adset ROAS<1.5 (no OFF; midnight restart)
+    (never last active ad; skip OFF/RUN)
 - SCALE ad budget-hog (today's metrics, SCALE in campaign name):
     pause:   ad spend>$150 & >=40% of adset spend & ad ROAS<1.2 & adset ROAS<1.4
     (never last active ad; skip OFF/RUN; midnight restart brings it back)
@@ -191,6 +194,17 @@ SCALE_AD_HOG_MIN_SPEND = 150.0
 SCALE_AD_HOG_SHARE = 0.4
 SCALE_AD_HOG_AD_ROAS = 1.2
 SCALE_AD_HOG_ADSET_ROAS = 1.4
+
+# SCALE + CBO bad-day pause (today's metrics). Pauses an ad having a bad
+# day inside a weak adset, without marking it OFF — midnight restart turns
+# it back on so it gets another go. Repeated bad days are left to the 7d
+# retire (scale_retire.py).
+#   ad spend > $200 & ad ROAS < 1.2 & adset ROAS < 1.5 -> pause for today
+#   never pauses the last active ad in an adset; skips OFF/RUN names
+SCALE_AD_BAD_DAY_ENABLED = True
+SCALE_AD_BAD_DAY_MIN_SPEND = 200.0
+SCALE_AD_BAD_DAY_AD_ROAS = 1.2
+SCALE_AD_BAD_DAY_ADSET_ROAS = 1.5
 
 
 @dataclass
@@ -1352,6 +1366,73 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 adset_spend=as_spend, adset_roas=as_roas,
             ))
 
+    # === SCALE + CBO bad-day pause (today's metrics) ===
+    bad_day_stop = 0
+    bad_day_fail = 0
+
+    if SCALE_AD_BAD_DAY_ENABLED:
+        paused_now = {a.ad_id for a in actions if a.action in ("paused", "would_pause")}
+        active_per_adset: dict[str, int] = defaultdict(int)
+        for ad_id, ad in today_ads.items():
+            if ad_info.get(ad_id, {}).get("status") == "ACTIVE" and ad_id not in paused_now:
+                active_per_adset[ad["adset_id"]] += 1
+
+        for ad_id, ad in sorted(today_ads.items(), key=lambda x: -x[1]["spend"]):
+            if not (_is_scale_campaign(ad["campaign_name"]) or _is_cbo_campaign(ad["campaign_name"])):
+                continue
+            if ad_id in paused_now:
+                continue
+            info = ad_info.get(ad_id, {})
+            if info.get("status") != "ACTIVE":
+                continue
+            current_ad_name = info.get("name", ad["ad_name"])
+            current_adset_name = info.get("adset_name", ad["adset_name"])
+            if any(m in current_adset_name.upper() for m in ("OFF", "RUN")):
+                continue
+            if any(m in current_ad_name.upper() for m in ("OFF", "RUN")):
+                continue
+
+            adset_id = ad["adset_id"]
+            as_data = adset_roas.get(adset_id, {})
+            as_spend = as_data.get("spend", 0)
+            as_roas = as_data.get("roas", 0)
+            spend = ad["spend"]
+            roas = ad["roas"]
+
+            if not (spend > SCALE_AD_BAD_DAY_MIN_SPEND
+                    and roas < SCALE_AD_BAD_DAY_AD_ROAS
+                    and as_roas < SCALE_AD_BAD_DAY_ADSET_ROAS):
+                continue
+            if active_per_adset[adset_id] <= 1:
+                continue
+
+            why = (
+                f"bad day: spend ${spend:.2f}>${SCALE_AD_BAD_DAY_MIN_SPEND:.0f}, ad ROAS {roas:.2f}<{SCALE_AD_BAD_DAY_AD_ROAS}, "
+                f"adset ROAS {as_roas:.2f}<{SCALE_AD_BAD_DAY_ADSET_ROAS} — back on at midnight"
+            )
+            if dry_run:
+                action, reason = "would_pause", f"dry run ({why})"
+                active_per_adset[adset_id] -= 1
+            else:
+                success, reason = _update_ad_status(config, ad_id, "PAUSED")
+                if success:
+                    action, reason = "paused", why
+                    bad_day_stop += 1
+                    active_per_adset[adset_id] -= 1
+                    logger.info(f"SCALE/CBO BAD DAY: Paused {ad_id} ({current_ad_name}) — {why}")
+                else:
+                    action = "failed"
+                    bad_day_fail += 1
+                    logger.warning(f"SCALE/CBO BAD DAY: Failed to pause {ad_id}: {reason}")
+
+            actions.append(StopLossAction(
+                ad_id=ad_id, ad_name=current_ad_name,
+                campaign_name=ad["campaign_name"], adset_name=current_adset_name,
+                action=action, reason=reason,
+                spend=spend, roas=roas, revenue=ad["revenue"], purchases=ad["purchases"],
+                adset_spend=as_spend, adset_roas=as_roas,
+            ))
+
     # === TESTING ad-level stop-loss / restart (rolling 7d metrics) ===
     testing_ad_stop = 0
     testing_ad_restart = 0
@@ -1466,7 +1547,8 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         f"ADSET (CBO): {cbo_stop} paused, {cbo_restart} activated, {cbo_fail} failed │ "
         f"AD (CBO MIK/LED): {cbo_ad_stop} paused, {cbo_ad_restart} activated, {cbo_ad_fail} failed │ "
         f"AD (SCALE+CBO): {scale_cbo_ad_stop} paused, {scale_cbo_ad_restart} activated, {scale_cbo_ad_fail} failed │ "
-        f"AD (SCALE hog): {scale_hog_stop} paused, {scale_hog_fail} failed"
+        f"AD (SCALE hog): {scale_hog_stop} paused, {scale_hog_fail} failed │ "
+        f"AD (SCALE/CBO bad day): {bad_day_stop} paused, {bad_day_fail} failed"
     )
     return actions, adset_actions
 
@@ -1524,6 +1606,7 @@ def build_stop_loss_slack_message(
             f"_TESTING surf: {('ON — spend>='+str(int(TESTING_SURF_SPEND_SHARE*100))+'% of budget & ROAS>='+str(TESTING_SURF_MIN_ROAS)+' → 2x budget (cap $'+str(int(TESTING_SURF_MAX_BUDGET))+'), reset to $'+str(int(TESTING_SURF_BASE_BUDGET))+' at midnight') if TESTING_SURF_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_TESTING ad (7d): {'ON' if TESTING_AD_7D_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_CBO adset: {'ON — stop spend>$'+str(int(CBO_ADSET_SPEND_THRESHOLD))+' & ROAS<'+str(CBO_ADSET_ROAS_THRESHOLD)+', restart mirror' if CBO_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
+            f"_SCALE/CBO ad bad day: {('ON — ad spend>$'+str(int(SCALE_AD_BAD_DAY_MIN_SPEND))+' & ad ROAS<'+str(SCALE_AD_BAD_DAY_AD_ROAS)+' & adset ROAS<'+str(SCALE_AD_BAD_DAY_ADSET_ROAS)+', back on at midnight') if SCALE_AD_BAD_DAY_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_SCALE ad hog: {('ON — ad spend>$'+str(int(SCALE_AD_HOG_MIN_SPEND))+' & >='+str(int(SCALE_AD_HOG_SHARE*100))+'% of adset spend & ad ROAS<'+str(SCALE_AD_HOG_AD_ROAS)+' & adset ROAS<'+str(SCALE_AD_HOG_ADSET_ROAS)+', never last ad') if SCALE_AD_HOG_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_SCALE+CBO ad: {'ON' if SCALE_CBO_AD_ENABLED else 'PAUSED (flag off)'}"
             f" — gate: adset spend>\\${int(SCALE_CBO_AD_ADSET_SPEND_GATE)} & adset ROAS<{SCALE_CBO_AD_ADSET_ROAS_GATE} & ad ROAS<{SCALE_CBO_AD_ROAS_THRESHOLD};"
