@@ -1,6 +1,6 @@
 """
-SCALE ad 7-day retire. Runs daily at 12:05am AEST, before the midnight
-restart, so a retired ad isn't switched straight back on.
+SCALE ad 7-day retire. Runs every 15 minutes alongside the stop-loss.
+Retired ads are marked OFF, so midnight restart leaves them off.
 
 Rule (last 7 complete days), campaigns with SCALE in the name (incl. SCALE | CBO):
 - ad 7d spend > $200 AND ad 7d ROAS < 1.2 AND adset 7d ROAS < 1.2
@@ -207,6 +207,9 @@ def send_scale_retire_report(actions: list[ScaleRetireAction], dry_run: bool, co
     retired = [a for a in actions if a.action in ("retired", "would_retire", "paused (rename failed)")]
     protected = [a for a in actions if a.action == "protected"]
     failed = [a for a in actions if a.action == "failed"]
+    if not (retired or failed):
+        logger.info(f"Scale-retire: nothing retired ({len(protected)} protected) — skipping Slack")
+        return True
 
     def line(a: ScaleRetireAction) -> str:
         extra = f" _({a.reason})_" if a.reason else ""

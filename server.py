@@ -474,6 +474,12 @@ def _run_stop_loss_scheduler():
             logger.error(f"Stop-loss check failed (consecutive: {consecutive_failures}): {e}")
             # Notify on every failure so you know immediately
             _send_stop_loss_failure(f"{type(e).__name__}: {e}")
+        try:
+            logger.info("Scheduler: running 15-min scale retire (7d)")
+            run_scale_retire()
+        except Exception as e:
+            logger.error(f"Scale retire failed: {e}")
+            _send_stop_loss_failure(f"scale-retire: {type(e).__name__}: {e}")
         time.sleep(15 * 60)
 
 
@@ -512,13 +518,6 @@ def _run_midnight_restart_scheduler():
         except Exception as e:
             logger.error(f"Testing retire failed: {e}")
             _send_stop_loss_failure(f"testing-retire: {type(e).__name__}: {e}")
-
-        try:
-            logger.info("Scheduler: running 12:05am AEST scale retire")
-            run_scale_retire()
-        except Exception as e:
-            logger.error(f"Scale retire failed: {e}")
-            _send_stop_loss_failure(f"scale-retire: {type(e).__name__}: {e}")
 
         try:
             logger.info("Scheduler: running 12:05am AEST surf reset")
