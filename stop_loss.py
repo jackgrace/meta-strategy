@@ -7,9 +7,9 @@ Rules:
     restart: PAUSED + spend>$1000 & ROAS>=1.2 (intra-day if ROAS improves)
     (skip adsets with OFF in name; midnight is the primary recovery path)
 - TESTING adsets (today's metrics):
-    early (OFF): ACTIVE + spend>$50 & 0p & (0 ATCs+checkouts OR cost/ATC>$10)
+    early:   ACTIVE + spend>$50 & (0 ATCs+checkouts OR cost/ATC>$12)
              (protected if ATCs>=3 & CPA/ATC<$6)
-    roas:    ACTIVE + spend>max($100, 20% of daily budget) & ROAS<1.4
+    roas:    ACTIVE + spend>$100 & ROAS<1.4
     restart: PAUSED + spend>$50 & neither early nor roas check fires
 - TESTING surf scaling (today's metrics, adsets at >= $250 budget):
     each time spend >= 50% of daily budget & ROAS >= 2.0 → double budget (cap $2000)
@@ -78,19 +78,19 @@ SCALE_ADSET_SPEND_THRESHOLD = 1000.0
 SCALE_ADSET_ROAS_THRESHOLD = 1.2
 
 # TESTING campaigns — adset-level rule (today's metrics).
-#   Early kill (OFF, TESTING_ADSET_EARLY_ENABLED): spend > $50 & 0 purchases & (no funnel events OR cost/event > $10)
+#   Early kill: spend > $50 & (no funnel events OR cost/event > $12)
 #     funnel event = ATC, or checkout if the adset has 0 ATCs (LPs that
 #     skip the cart). Protected if ATCs >= 3 & CPA/ATC < $6.
-#   ROAS check: spend > max($100, 20% of daily budget) & ROAS < 1.4
+#   ROAS check: spend > $100 & ROAS < 1.4
 #   Restart:    PAUSED + spend > $50 & neither check above would pause it
 TESTING_ADSET_ENABLED = True
-TESTING_ADSET_EARLY_ENABLED = False
+TESTING_ADSET_EARLY_ENABLED = True
 TESTING_ADSET_EARLY_SPEND = 50.0
-TESTING_ADSET_EARLY_COST_PER_EVENT = 10.0
+TESTING_ADSET_EARLY_COST_PER_EVENT = 12.0
 TESTING_ADSET_PROTECT_MIN_ATCS = 3
 TESTING_ADSET_PROTECT_CPA_ATC = 6.0
 TESTING_ADSET_CEILING_MIN_SPEND = 100.0
-TESTING_ADSET_CEILING_BUDGET_SHARE = 0.2
+TESTING_ADSET_CEILING_BUDGET_SHARE = 0.0  # flat $100
 TESTING_ADSET_ROAS = 1.4
 
 # TESTING campaigns — ad-level intra-day cull (today's metrics). Culls the
@@ -785,7 +785,6 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             TESTING_ADSET_EARLY_ENABLED
             and not protected
             and spend > TESTING_ADSET_EARLY_SPEND
-            and purchases == 0
             and (events == 0 or cost_per_event > TESTING_ADSET_EARLY_COST_PER_EVENT)
         )
         ceiling_pause = spend > threshold and roas < TESTING_ADSET_ROAS
@@ -794,9 +793,9 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             if ceiling_pause:
                 branch = f"ROAS check: spend>${threshold:.0f} & ROAS {roas:.2f}<{TESTING_ADSET_ROAS}"
             elif events == 0:
-                branch = f"early: spend>${TESTING_ADSET_EARLY_SPEND:.0f} & 0p & 0 ATCs/checkouts"
+                branch = f"early: spend>${TESTING_ADSET_EARLY_SPEND:.0f} & 0 ATCs/checkouts"
             else:
-                branch = f"early: spend>${TESTING_ADSET_EARLY_SPEND:.0f} & 0p & cost/{event_label} ${cost_per_event:.2f}>${TESTING_ADSET_EARLY_COST_PER_EVENT:.0f}"
+                branch = f"early: spend>${TESTING_ADSET_EARLY_SPEND:.0f} & cost/{event_label} ${cost_per_event:.2f}>${TESTING_ADSET_EARLY_COST_PER_EVENT:.0f}"
             if dry_run:
                 action, reason = "would_pause", f"dry run ({branch})"
                 testing_adsets_paused_now.add(adset_id)
@@ -1601,7 +1600,7 @@ def build_stop_loss_slack_message(
         "text": {"type": "mrkdwn", "text": (
             f"*[{mode}]* " + " │ ".join(summary_parts) + "\n"
             f"_SCALE adset: {'ON — stop spend>$'+str(int(SCALE_ADSET_SPEND_THRESHOLD))+' & ROAS<'+str(SCALE_ADSET_ROAS_THRESHOLD)+', restart mirror' if SCALE_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
-            f"_TESTING adset: {('ON — early: '+(('spend>$'+str(int(TESTING_ADSET_EARLY_SPEND))+' & 0p & (0 ATCs/checkouts OR cost/ATC>$'+str(int(TESTING_ADSET_EARLY_COST_PER_EVENT))+')') if TESTING_ADSET_EARLY_ENABLED else 'off')+' | ROAS check: spend>max($'+str(int(TESTING_ADSET_CEILING_MIN_SPEND))+', '+str(int(TESTING_ADSET_CEILING_BUDGET_SHARE*100))+'% budget) & ROAS<'+str(TESTING_ADSET_ROAS)) if TESTING_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
+            f"_TESTING adset: {('ON — early: '+(('spend>$'+str(int(TESTING_ADSET_EARLY_SPEND))+' & (0 ATCs/checkouts OR cost/ATC>$'+str(int(TESTING_ADSET_EARLY_COST_PER_EVENT))+')') if TESTING_ADSET_EARLY_ENABLED else 'off')+' | ROAS check: spend>max($'+str(int(TESTING_ADSET_CEILING_MIN_SPEND))+', '+str(int(TESTING_ADSET_CEILING_BUDGET_SHARE*100))+'% budget) & ROAS<'+str(TESTING_ADSET_ROAS)) if TESTING_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_TESTING ad cull: {('ON — fast: spend>$'+str(int(TESTING_AD_CULL_FAST_SPEND))+' & (0 ATCs OR CPA/ATC>$'+str(int(TESTING_AD_CULL_FAST_CPA_ATC))+') | late: spend>$'+str(int(TESTING_AD_CULL_LATE_SPEND))+' & (ROAS<'+str(TESTING_AD_CULL_LATE_ROAS)+' OR 0p) | protect CPA/ATC<$'+str(int(TESTING_AD_CULL_CHEAP_ATC_PROTECT))+' | never last ad') if TESTING_AD_CULL_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_TESTING surf: {('ON — spend>='+str(int(TESTING_SURF_SPEND_SHARE*100))+'% of budget & ROAS>='+str(TESTING_SURF_MIN_ROAS)+' → 2x budget (cap $'+str(int(TESTING_SURF_MAX_BUDGET))+'), reset to $'+str(int(TESTING_SURF_BASE_BUDGET))+' at midnight') if TESTING_SURF_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_TESTING ad (7d): {'ON' if TESTING_AD_7D_ENABLED else 'PAUSED (flag off)'}_\n"
