@@ -4,7 +4,7 @@ Retired ads are marked OFF, so midnight restart leaves them off.
 
 Rule (last 7 complete days), campaigns with SCALE (incl. SCALE | CBO) or TESTING
 in the name, each flag-controlled:
-- ad 7d spend > $150 AND ad 7d ROAS < 1.2 AND adset 7d ROAS < 1.5
+- ad 7d spend > $150 (SCALE) / $100 (TESTING) AND ad 7d ROAS < 1.2 AND adset 7d ROAS < 1.5
 - ad created at least 3 days ago
 - ad and adset names don't contain OFF or RUN
 - never retires the last active ad in an adset
@@ -28,7 +28,8 @@ logger = logging.getLogger(__name__)
 
 SCALE_RETIRE_ENABLED = True
 TESTING_RETIRE_ADS_ENABLED = True  # same rule applied to TESTING campaigns
-RETIRE_SPEND_THRESHOLD = 150.0
+RETIRE_SPEND_THRESHOLD = 150.0          # SCALE
+TESTING_RETIRE_SPEND_THRESHOLD = 100.0  # TESTING
 RETIRE_ROAS_THRESHOLD = 1.2
 RETIRE_ADSET_ROAS_THRESHOLD = 1.5
 MIN_AD_AGE_DAYS = 3
@@ -127,7 +128,10 @@ def run_scale_retire(config: Config, dry_run: bool = False) -> list[ScaleRetireA
     if SCALE_RETIRE_ENABLED:
         ads.update(_fetch_ads_7d(config, "SCALE", _is_scale_campaign))
     if TESTING_RETIRE_ADS_ENABLED:
-        ads.update(_fetch_ads_7d(config, "TESTING", _is_testing_campaign))
+        testing = _fetch_ads_7d(config, "TESTING", _is_testing_campaign)
+        for a in testing.values():
+            a["testing"] = True
+        ads.update(testing)
 
     by_adset: dict[str, list[str]] = defaultdict(list)
     adset_spend: dict[str, float] = defaultdict(float)
@@ -141,7 +145,7 @@ def run_scale_retire(config: Config, dry_run: bool = False) -> list[ScaleRetireA
 
     candidates = [
         ad_id for ad_id, a in ads.items()
-        if a["spend"] > RETIRE_SPEND_THRESHOLD
+        if a["spend"] > (TESTING_RETIRE_SPEND_THRESHOLD if a.get("testing") else RETIRE_SPEND_THRESHOLD)
         and a["roas"] < RETIRE_ROAS_THRESHOLD
         and adset_roas(a["adset_id"]) < RETIRE_ADSET_ROAS_THRESHOLD
     ]
@@ -227,7 +231,7 @@ def send_scale_retire_report(actions: list[ScaleRetireAction], dry_run: bool, co
     blocks = [
         {"type": "header", "text": {"type": "plain_text", "text": f"🪦 SCALE + TESTING ads retired (7d) — {len(retired)}"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": (
-            f"*[{mode}]* Ad 7d spend > ${RETIRE_SPEND_THRESHOLD:,.0f} & ad 7d ROAS < {RETIRE_ROAS_THRESHOLD} "
+            f"*[{mode}]* Ad 7d spend > ${RETIRE_SPEND_THRESHOLD:,.0f} (SCALE) / ${TESTING_RETIRE_SPEND_THRESHOLD:,.0f} (TESTING) & ad 7d ROAS < {RETIRE_ROAS_THRESHOLD} "
             f"& adset 7d ROAS < {RETIRE_ADSET_ROAS_THRESHOLD} & ad ≥ {MIN_AD_AGE_DAYS} days old → pause + mark OFF. "
             f"Remove OFF from the name to bring one back."
         )}]},
