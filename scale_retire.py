@@ -3,7 +3,7 @@ SCALE ad 7-day retire. Runs every 15 minutes alongside the stop-loss.
 Retired ads are marked OFF, so midnight restart leaves them off.
 
 Rule (last 7 complete days), campaigns with SCALE in the name (incl. SCALE | CBO):
-- ad 7d spend > $200 AND ad 7d ROAS < 1.2 AND adset 7d ROAS < 1.2
+- ad 7d spend > $150 AND ad 7d ROAS < 1.2 AND adset 7d ROAS < 1.5
 - ad created at least 3 days ago
 - ad and adset names don't contain OFF or RUN
 - never retires the last active ad in an adset
@@ -26,9 +26,9 @@ from testing_retire import _rename
 logger = logging.getLogger(__name__)
 
 SCALE_RETIRE_ENABLED = True
-RETIRE_SPEND_THRESHOLD = 200.0
+RETIRE_SPEND_THRESHOLD = 150.0
 RETIRE_ROAS_THRESHOLD = 1.2
-RETIRE_ADSET_ROAS_THRESHOLD = 1.2
+RETIRE_ADSET_ROAS_THRESHOLD = 1.5
 MIN_AD_AGE_DAYS = 3
 
 

@@ -224,7 +224,7 @@ def run_surf_reset() -> dict:
 
 
 def run_scale_retire() -> dict:
-    """Every 15 min: retire SCALE ads, 7d spend > $200 & ad + adset ROAS < 1.2, age >= 3d."""
+    """Every 15 min: retire SCALE ads, 7d spend > $150 & ad ROAS < 1.2 & adset ROAS < 1.5, age >= 3d."""
     dry_run = _dry_run()
     mode = "DRY RUN" if dry_run else "LIVE"
     per_account = []
