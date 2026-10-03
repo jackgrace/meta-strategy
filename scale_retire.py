@@ -1,8 +1,9 @@
 """
-SCALE ad 7-day retire. Runs every 15 minutes alongside the stop-loss.
+SCALE + TESTING ad 7-day retire. Runs every 15 minutes alongside the stop-loss.
 Retired ads are marked OFF, so midnight restart leaves them off.
 
-Rule (last 7 complete days), campaigns with SCALE in the name (incl. SCALE | CBO):
+Rule (last 7 complete days), campaigns with SCALE (incl. SCALE | CBO) or TESTING
+in the name, each flag-controlled:
 - ad 7d spend > $150 AND ad 7d ROAS < 1.2 AND adset 7d ROAS < 1.5
 - ad created at least 3 days ago
 - ad and adset names don't contain OFF or RUN
@@ -20,12 +21,13 @@ import requests
 
 from config import Config
 from meta_api import API_BASE, fetch_ad_statuses
-from stop_loss import _is_scale_campaign, _update_ad_status
+from stop_loss import _is_scale_campaign, _is_testing_campaign, _update_ad_status
 from testing_retire import _rename
 
 logger = logging.getLogger(__name__)
 
 SCALE_RETIRE_ENABLED = True
+TESTING_RETIRE_ADS_ENABLED = True  # same rule applied to TESTING campaigns
 RETIRE_SPEND_THRESHOLD = 150.0
 RETIRE_ROAS_THRESHOLD = 1.2
 RETIRE_ADSET_ROAS_THRESHOLD = 1.5
@@ -46,7 +48,7 @@ class ScaleRetireAction:
     reason: str = ""
 
 
-def _fetch_scale_ads_7d(config: Config) -> dict[str, dict]:
+def _fetch_ads_7d(config: Config, keyword: str, matcher) -> dict[str, dict]:
     url = f"{API_BASE}/{config.meta_ad_account_id}/insights"
     params = {
         "access_token": config.meta_access_token,
@@ -56,7 +58,7 @@ def _fetch_scale_ads_7d(config: Config) -> dict[str, dict]:
         "limit": 200,
         "filtering": (
             '[{"field":"impressions","operator":"GREATER_THAN","value":"0"},'
-            '{"field":"campaign.name","operator":"CONTAIN","value":"SCALE"}]'
+            '{"field":"campaign.name","operator":"CONTAIN","value":"' + keyword + '"}]'
         ),
     }
     ads: dict[str, dict] = {}
@@ -89,7 +91,7 @@ def _fetch_scale_ads_7d(config: Config) -> dict[str, dict]:
 
         data = resp.json()
         for row in data.get("data", []):
-            if not _is_scale_campaign(row.get("campaign_name", "")):
+            if not matcher(row.get("campaign_name", "")):
                 continue
             spend = float(row.get("spend", 0))
             revenue = 0.0
@@ -112,16 +114,20 @@ def _fetch_scale_ads_7d(config: Config) -> dict[str, dict]:
             }
         url = data.get("paging", {}).get("next")
         first = False
-    logger.info(f"Scale-retire: fetched 7d metrics for {len(ads)} SCALE ads")
+    logger.info(f"Retire-7d: fetched 7d metrics for {len(ads)} {keyword} ads")
     return ads
 
 
 def run_scale_retire(config: Config, dry_run: bool = False) -> list[ScaleRetireAction]:
-    if not SCALE_RETIRE_ENABLED:
-        logger.info("Scale-retire: DISABLED via SCALE_RETIRE_ENABLED flag — skipping")
+    if not (SCALE_RETIRE_ENABLED or TESTING_RETIRE_ADS_ENABLED):
+        logger.info("Retire-7d: DISABLED for SCALE and TESTING — skipping")
         return []
 
-    ads = _fetch_scale_ads_7d(config)
+    ads: dict[str, dict] = {}
+    if SCALE_RETIRE_ENABLED:
+        ads.update(_fetch_ads_7d(config, "SCALE", _is_scale_campaign))
+    if TESTING_RETIRE_ADS_ENABLED:
+        ads.update(_fetch_ads_7d(config, "TESTING", _is_testing_campaign))
 
     by_adset: dict[str, list[str]] = defaultdict(list)
     adset_spend: dict[str, float] = defaultdict(float)
@@ -219,7 +225,7 @@ def send_scale_retire_report(actions: list[ScaleRetireAction], dry_run: bool, co
         )
 
     blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"🪦 SCALE ads retired (7d) — {len(retired)}"}},
+        {"type": "header", "text": {"type": "plain_text", "text": f"🪦 SCALE + TESTING ads retired (7d) — {len(retired)}"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": (
             f"*[{mode}]* Ad 7d spend > ${RETIRE_SPEND_THRESHOLD:,.0f} & ad 7d ROAS < {RETIRE_ROAS_THRESHOLD} "
             f"& adset 7d ROAS < {RETIRE_ADSET_ROAS_THRESHOLD} & ad ≥ {MIN_AD_AGE_DAYS} days old → pause + mark OFF. "
