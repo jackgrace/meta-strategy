@@ -7,7 +7,7 @@ in the name, each flag-controlled:
 - ad 7d spend > $150 (SCALE) / $100 (TESTING) AND ad 7d ROAS < 1.2 AND adset 7d ROAS < 1.5
 - ad created at least 3 days ago
 - ad and adset names don't contain OFF or RUN
-- never retires the last active ad in an adset
+- also retires the last active ad in an adset (its numbers are the adset's)
 → pause ad + append " - OFF" (midnight restart skips it).
 """
 
@@ -152,13 +152,7 @@ def run_scale_retire(config: Config, dry_run: bool = False) -> list[ScaleRetireA
     if not candidates:
         return []
 
-    # Statuses for every ad in the affected adsets (for the last-active-ad guard).
-    affected_ids = {x for ad_id in candidates for x in by_adset[ads[ad_id]["adset_id"]]}
-    info = fetch_ad_statuses(config, ad_ids=affected_ids)
-    active_per_adset: dict[str, int] = defaultdict(int)
-    for ad_id in affected_ids:
-        if info.get(ad_id, {}).get("status") == "ACTIVE":
-            active_per_adset[ads[ad_id]["adset_id"]] += 1
+    info = fetch_ad_statuses(config, ad_ids=set(candidates))
 
     actions: list[ScaleRetireAction] = []
     for ad_id in sorted(candidates, key=lambda x: -ads[x]["spend"]):
@@ -186,12 +180,6 @@ def run_scale_retire(config: Config, dry_run: bool = False) -> list[ScaleRetireA
             adset_roas_7d=as_roas, action="would_retire",
         )
 
-        if status == "ACTIVE" and active_per_adset[adset_id] <= 1:
-            act.action = "protected"
-            act.reason = "last active ad in adset"
-            actions.append(act)
-            continue
-
         if not dry_run:
             ok, reason = _update_ad_status(config, ad_id, "PAUSED")
             if not ok:
@@ -202,8 +190,6 @@ def run_scale_retire(config: Config, dry_run: bool = False) -> list[ScaleRetireA
                 logger.info(f"Scale-retire: retired {ad_id} ({name}) — 7d ${a['spend']:.2f} @ {a['roas']:.2f}x")
             else:
                 act.action = "paused (rename failed)"
-        if status == "ACTIVE" and act.action != "failed":
-            active_per_adset[adset_id] -= 1
         actions.append(act)
     return actions
 
