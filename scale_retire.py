@@ -22,7 +22,6 @@ import requests
 from config import Config
 from meta_api import API_BASE, fetch_ad_statuses
 from stop_loss import _is_scale_campaign, _is_testing_campaign, _update_ad_status
-from testing_retire import _rename
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +32,34 @@ TESTING_RETIRE_SPEND_THRESHOLD = 100.0  # TESTING
 RETIRE_ROAS_THRESHOLD = 1.2
 RETIRE_ADSET_ROAS_THRESHOLD = 1.5
 MIN_AD_AGE_DAYS = 3
+
+
+def _rename(config: Config, object_id: str, new_name: str) -> tuple[bool, str]:
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                f"{API_BASE}/{object_id}?access_token={config.meta_access_token}",
+                data={"name": new_name},
+                timeout=30,
+            )
+        except requests.RequestException as e:
+            err = str(e)[:200]
+        else:
+            if resp.ok:
+                return True, ""
+            try:
+                e = resp.json().get("error", {})
+                err = e.get("error_user_msg") or e.get("error_user_title") or e.get("message") or resp.text[:200]
+            except ValueError:
+                err = f"HTTP {resp.status_code}: {resp.text[:200]}"
+        if attempt < 2:
+            time.sleep(3)
+    logger.warning(f"Rename {object_id} failed: {err}")
+    return False, err
+
+
+# ad_id -> date a rename failure was last posted to Slack (in-memory).
+_rename_failure_reported: dict[str, object] = {}
 
 
 @dataclass
@@ -181,15 +208,24 @@ def run_scale_retire(config: Config, dry_run: bool = False) -> list[ScaleRetireA
         )
 
         if not dry_run:
-            ok, reason = _update_ad_status(config, ad_id, "PAUSED")
+            # Already paused (e.g. an earlier rename failed): only retry the rename.
+            ok, reason = (True, "") if status == "PAUSED" else _update_ad_status(config, ad_id, "PAUSED")
             if not ok:
                 act.action, act.reason = "failed", reason
                 logger.warning(f"Scale-retire: failed to pause {ad_id}: {reason}")
-            elif _rename(config, ad_id, f"{name} - OFF"):
-                act.action = "retired"
-                logger.info(f"Scale-retire: retired {ad_id} ({name}) — 7d ${a['spend']:.2f} @ {a['roas']:.2f}x")
             else:
-                act.action = "paused (rename failed)"
+                renamed, err = _rename(config, ad_id, f"{name} - OFF")
+                if renamed:
+                    act.action = "retired"
+                    logger.info(f"Scale-retire: retired {ad_id} ({name}) — 7d ${a['spend']:.2f} @ {a['roas']:.2f}x")
+                else:
+                    act.action, act.reason = "paused (rename failed)", err
+                    today = datetime.now(timezone.utc).date()
+                    if _rename_failure_reported.get(ad_id) == today:
+                        continue  # already in Slack today; don't repeat every 15 min
+                    _rename_failure_reported[ad_id] = today
+        elif status == "PAUSED":
+            continue
         actions.append(act)
     return actions
 
@@ -200,10 +236,11 @@ def send_scale_retire_report(actions: list[ScaleRetireAction], dry_run: bool, co
         return True
 
     mode = "DRY RUN" if dry_run else "LIVE"
-    retired = [a for a in actions if a.action in ("retired", "would_retire", "paused (rename failed)")]
+    retired = [a for a in actions if a.action in ("retired", "would_retire")]
+    rename_failed = [a for a in actions if a.action == "paused (rename failed)"]
     protected = [a for a in actions if a.action == "protected"]
     failed = [a for a in actions if a.action == "failed"]
-    if not (retired or failed):
+    if not (retired or failed or rename_failed):
         logger.info(f"Scale-retire: nothing retired ({len(protected)} protected) — skipping Slack")
         return True
 
@@ -222,7 +259,12 @@ def send_scale_retire_report(actions: list[ScaleRetireAction], dry_run: bool, co
             f"Remove OFF from the name to bring one back."
         )}]},
     ]
-    for title, group in (("Retired", retired), ("Protected (kept running)", protected), ("Failed", failed)):
+    for title, group in (
+        ("Retired", retired),
+        ("Paused, but OFF rename failed — will restart at midnight unless you add OFF", rename_failed),
+        ("Protected (kept running)", protected),
+        ("Failed", failed),
+    ):
         if group:
             blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*{title}*\n" + "\n".join(line(a) for a in group[:15])}})
 
