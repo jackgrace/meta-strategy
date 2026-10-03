@@ -4,7 +4,7 @@ Retired ads are marked OFF, so midnight restart leaves them off.
 
 Rule (last 7 complete days), campaigns with SCALE in the name (incl. SCALE | CBO):
 - ad 7d spend > $200 AND ad 7d ROAS < 1.2 AND adset 7d ROAS < 1.2
-- ad created at least 7 days ago
+- ad created at least 3 days ago
 - ad and adset names don't contain OFF or RUN
 - never retires the last active ad in an adset
 → pause ad + append " - OFF" (midnight restart skips it).
@@ -29,7 +29,7 @@ SCALE_RETIRE_ENABLED = True
 RETIRE_SPEND_THRESHOLD = 200.0
 RETIRE_ROAS_THRESHOLD = 1.2
 RETIRE_ADSET_ROAS_THRESHOLD = 1.2
-MIN_AD_AGE_DAYS = 7
+MIN_AD_AGE_DAYS = 3
 
 
 @dataclass
