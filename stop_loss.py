@@ -189,7 +189,7 @@ SCALE_CBO_AD_SPEND_HOG_ADSET_ROAS = 1.5
 #   ad spend > $150 & ad share of adset spend >= 40%
 #   & ad ROAS < 1.2 & adset ROAS < 1.4 -> pause
 #   never pauses the last active ad in an adset; skips OFF/RUN names
-SCALE_AD_HOG_ENABLED = True
+SCALE_AD_HOG_ENABLED = False
 SCALE_AD_HOG_MIN_SPEND = 150.0
 SCALE_AD_HOG_SHARE = 0.4
 SCALE_AD_HOG_AD_ROAS = 1.2
@@ -201,7 +201,7 @@ SCALE_AD_HOG_ADSET_ROAS = 1.4
 # retire (scale_retire.py).
 #   ad spend > $200 & ad ROAS < 1.2 & adset ROAS < 1.5 -> pause for today
 #   never pauses the last active ad in an adset; skips OFF/RUN names
-SCALE_AD_BAD_DAY_ENABLED = True
+SCALE_AD_BAD_DAY_ENABLED = False
 SCALE_AD_BAD_DAY_MIN_SPEND = 200.0
 SCALE_AD_BAD_DAY_AD_ROAS = 1.2
 SCALE_AD_BAD_DAY_ADSET_ROAS = 1.5
