@@ -25,8 +25,8 @@ from stop_loss import _is_scale_campaign, _is_testing_campaign, _update_ad_statu
 
 logger = logging.getLogger(__name__)
 
-SCALE_RETIRE_ENABLED = True
-TESTING_RETIRE_ADS_ENABLED = True  # same rule applied to TESTING campaigns
+SCALE_RETIRE_ENABLED = False
+TESTING_RETIRE_ADS_ENABLED = False  # same rule applied to TESTING campaigns
 RETIRE_SPEND_THRESHOLD = 150.0          # SCALE
 TESTING_RETIRE_SPEND_THRESHOLD = 100.0  # TESTING
 RETIRE_ROAS_THRESHOLD = 1.2
