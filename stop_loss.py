@@ -36,6 +36,7 @@ Rules:
 - SCALE + CBO ad cost/ATC stop (today's metrics):
     A: ad spend>$50 & cost/ATC>$15 (0 ATCs counts) -> pause
     B: ad spend>$100 & ROAS<1.2 & cost/ATC>$10 -> pause
+    C: ad spend>$150 & ROAS<1.2 -> pause
     (no OFF; midnight restart; never last active ad; skip OFF/RUN)
 - SCALE + CBO ad bad day (today's metrics):
     pause:   ad spend>$200 & ad ROAS<1.2 & adset ROAS<1.5 (no OFF; midnight restart)
@@ -214,6 +215,7 @@ SCALE_AD_BAD_DAY_ADSET_ROAS = 1.5
 # midnight restart gives paused ads another go the next day.
 #   A: ad spend > $50  & cost/ATC > $15                -> pause
 #   B: ad spend > $100 & ROAS < 1.2 & cost/ATC > $10   -> pause
+#   C: ad spend > $150 & ROAS < 1.2 (any cost/ATC)     -> pause
 #   0 ATCs counts as an expensive cost/ATC.
 #   never pauses the last active ad in an adset; skips OFF/RUN names
 SCALE_CBO_AD_ATC_ENABLED = True
@@ -222,6 +224,8 @@ SCALE_CBO_AD_ATC_A_MAX_CPA = 15.0
 SCALE_CBO_AD_ATC_B_SPEND = 100.0
 SCALE_CBO_AD_ATC_B_ROAS = 1.2
 SCALE_CBO_AD_ATC_B_MAX_CPA = 10.0
+SCALE_CBO_AD_ATC_C_SPEND = 150.0
+SCALE_CBO_AD_ATC_C_ROAS = 1.2
 
 
 @dataclass
@@ -1488,6 +1492,8 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                   and cost_per_atc > SCALE_CBO_AD_ATC_B_MAX_CPA):
                 why = (f"spend ${spend:.2f}>${SCALE_CBO_AD_ATC_B_SPEND:.0f} & ROAS {roas:.2f}<{SCALE_CBO_AD_ATC_B_ROAS} "
                        f"& {atc_txt} (>${SCALE_CBO_AD_ATC_B_MAX_CPA:.0f})")
+            elif spend > SCALE_CBO_AD_ATC_C_SPEND and roas < SCALE_CBO_AD_ATC_C_ROAS:
+                why = f"spend ${spend:.2f}>${SCALE_CBO_AD_ATC_C_SPEND:.0f} & ROAS {roas:.2f}<{SCALE_CBO_AD_ATC_C_ROAS}"
             else:
                 continue
 
@@ -1693,7 +1699,7 @@ def build_stop_loss_slack_message(
             f"_TESTING surf: {('ON — spend>='+str(int(TESTING_SURF_SPEND_SHARE*100))+'% of budget & ROAS>='+str(TESTING_SURF_MIN_ROAS)+' → 2x budget (cap $'+str(int(TESTING_SURF_MAX_BUDGET))+'), reset to $'+str(int(TESTING_SURF_BASE_BUDGET))+' at midnight') if TESTING_SURF_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_TESTING ad (7d): {'ON' if TESTING_AD_7D_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_CBO adset: {'ON — stop spend>$'+str(int(CBO_ADSET_SPEND_THRESHOLD))+' & ROAS<'+str(CBO_ADSET_ROAS_THRESHOLD)+', restart mirror' if CBO_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
-            f"_SCALE/CBO ad cost/ATC: {('ON — spend>$'+str(int(SCALE_CBO_AD_ATC_A_SPEND))+' & cost/ATC>$'+str(int(SCALE_CBO_AD_ATC_A_MAX_CPA))+' | spend>$'+str(int(SCALE_CBO_AD_ATC_B_SPEND))+' & ROAS<'+str(SCALE_CBO_AD_ATC_B_ROAS)+' & cost/ATC>$'+str(int(SCALE_CBO_AD_ATC_B_MAX_CPA))+', back on at midnight') if SCALE_CBO_AD_ATC_ENABLED else 'PAUSED (flag off)'}_\n"
+            f"_SCALE/CBO ad cost/ATC: {('ON — spend>$'+str(int(SCALE_CBO_AD_ATC_A_SPEND))+' & cost/ATC>$'+str(int(SCALE_CBO_AD_ATC_A_MAX_CPA))+' | spend>$'+str(int(SCALE_CBO_AD_ATC_B_SPEND))+' & ROAS<'+str(SCALE_CBO_AD_ATC_B_ROAS)+' & cost/ATC>$'+str(int(SCALE_CBO_AD_ATC_B_MAX_CPA))+' | spend>$'+str(int(SCALE_CBO_AD_ATC_C_SPEND))+' & ROAS<'+str(SCALE_CBO_AD_ATC_C_ROAS)+', back on at midnight') if SCALE_CBO_AD_ATC_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_SCALE/CBO ad bad day: {('ON — ad spend>$'+str(int(SCALE_AD_BAD_DAY_MIN_SPEND))+' & ad ROAS<'+str(SCALE_AD_BAD_DAY_AD_ROAS)+' & adset ROAS<'+str(SCALE_AD_BAD_DAY_ADSET_ROAS)+', back on at midnight') if SCALE_AD_BAD_DAY_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_SCALE ad hog: {('ON — ad spend>$'+str(int(SCALE_AD_HOG_MIN_SPEND))+' & >='+str(int(SCALE_AD_HOG_SHARE*100))+'% of adset spend & ad ROAS<'+str(SCALE_AD_HOG_AD_ROAS)+' & adset ROAS<'+str(SCALE_AD_HOG_ADSET_ROAS)+', never last ad') if SCALE_AD_HOG_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_SCALE+CBO ad: {'ON' if SCALE_CBO_AD_ENABLED else 'PAUSED (flag off)'}"
