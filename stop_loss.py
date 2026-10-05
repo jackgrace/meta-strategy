@@ -37,7 +37,8 @@ Rules:
     A: ad spend>$50 & cost/ATC>$15 (0 ATCs counts) -> pause
     B: ad spend>$100 & ROAS<1.2 & cost/ATC>$10 -> pause
     C: ad spend>$150 & ROAS<1.2 -> pause
-    (no OFF; midnight restart; never last active ad; skip OFF/RUN)
+    restart: PAUSED + spend>$50 & no enabled SCALE/CBO ad rule would pause it
+    (no OFF; never last active ad; skip OFF/RUN)
 - SCALE + CBO ad bad day (today's metrics):
     pause:   ad spend>$200 & ad ROAS<1.2 & adset ROAS<1.5 (no OFF; midnight restart)
     (never last active ad; skip OFF/RUN)
@@ -1024,6 +1025,61 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 adset_spend=as_data.get("spend", 0), adset_roas=as_data.get("roas", 0),
             ))
 
+    # === TESTING ad-level cull restart (mirror) ===
+    # A paused testing ad comes back once neither cut would fire on today's
+    # numbers (e.g. late ATCs/purchases). Floor at the fast-cut spend so ads
+    # paused by hand before the rule could act aren't touched.
+    testing_cull_restart = 0
+    if TESTING_AD_CULL_ENABLED:
+        culled_now = {a.ad_id for a in actions if a.action in ("paused", "would_pause")}
+        for ad_id, ad in today_ads.items():
+            if ad["adset_id"] not in testing_adset_ids or ad_id in culled_now:
+                continue
+            info = ad_info.get(ad_id, {})
+            if info.get("status") != "PAUSED":
+                continue
+            if adset_info.get(ad["adset_id"], {}).get("status") != "ACTIVE":
+                continue
+            current_ad_name = info.get("name", ad["ad_name"])
+            current_adset_name = info.get("adset_name", ad["adset_name"])
+            if "OFF" in current_adset_name.upper():
+                continue
+            if "OFF" in current_ad_name.upper() or "RUN" in current_ad_name.upper():
+                continue
+            spend = ad["spend"]
+            if spend <= TESTING_AD_CULL_FAST_SPEND:
+                continue
+            roas = ad["roas"]
+            purchases = ad["purchases"]
+            atcs = ad.get("atcs", 0)
+            cost_per_atc = ad.get("cost_per_atc", 0)
+            protected = atcs > 0 and cost_per_atc < TESTING_AD_CULL_CHEAP_ATC_PROTECT
+            fast_cut = spend > TESTING_AD_CULL_FAST_SPEND and (atcs == 0 or cost_per_atc > TESTING_AD_CULL_FAST_CPA_ATC)
+            late_cut = spend > TESTING_AD_CULL_LATE_SPEND and (roas < TESTING_AD_CULL_LATE_ROAS or purchases == 0)
+            if not protected and (fast_cut or late_cut):
+                continue
+            why = f"cull no longer applies: spend ${spend:.2f}, ROAS {roas:.2f}, {atcs} ATCs, {purchases}p"
+            if dry_run:
+                action, reason = "would_activate", f"dry run ({why})"
+            else:
+                success, reason = _update_ad_status(config, ad_id, "ACTIVE")
+                if success:
+                    action, reason = "activated", why
+                    testing_cull_restart += 1
+                    logger.info(f"TESTING AD CULL RESTART: Activated {ad_id} ({current_ad_name}) — {why}")
+                else:
+                    action = "failed"
+                    testing_cull_fail += 1
+                    logger.warning(f"TESTING AD CULL RESTART: Failed to activate {ad_id}: {reason}")
+            as_data = adset_roas.get(ad["adset_id"], {})
+            actions.append(StopLossAction(
+                ad_id=ad_id, ad_name=current_ad_name,
+                campaign_name=ad["campaign_name"], adset_name=current_adset_name,
+                action=action, reason=reason,
+                spend=spend, roas=roas, revenue=ad["revenue"], purchases=purchases,
+                adset_spend=as_data.get("spend", 0), adset_roas=as_data.get("roas", 0),
+            ))
+
     # === CBO adset-level stop-loss / restart (today's metrics) ===
     cbo_stop = 0
     cbo_restart = 0
@@ -1525,6 +1581,91 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 adset_spend=as_data.get("spend", 0), adset_roas=as_data.get("roas", 0),
             ))
 
+    # === SCALE + CBO ad restart (mirror of hog, bad-day, cost/ATC) ===
+    # A paused SCALE/CBO ad comes back once none of the enabled intra-day ad
+    # rules would pause it on today's numbers. One shared check so one rule
+    # never restarts an ad another rule still wants paused.
+    def _scale_ad_pause_reason(ad: dict) -> str | None:
+        spend = ad["spend"]
+        roas = ad["roas"]
+        atcs = ad.get("atcs", 0)
+        cost_per_atc = spend / atcs if atcs > 0 else float("inf")
+        as_data = adset_roas.get(ad["adset_id"], {})
+        as_spend = as_data.get("spend", 0)
+        as_roas = as_data.get("roas", 0)
+        if SCALE_CBO_AD_ATC_ENABLED:
+            if spend > SCALE_CBO_AD_ATC_A_SPEND and cost_per_atc > SCALE_CBO_AD_ATC_A_MAX_CPA:
+                return "cost/ATC rule A"
+            if spend > SCALE_CBO_AD_ATC_B_SPEND and roas < SCALE_CBO_AD_ATC_B_ROAS and cost_per_atc > SCALE_CBO_AD_ATC_B_MAX_CPA:
+                return "cost/ATC rule B"
+            if spend > SCALE_CBO_AD_ATC_C_SPEND and roas < SCALE_CBO_AD_ATC_C_ROAS:
+                return "cost/ATC rule C"
+        if SCALE_AD_BAD_DAY_ENABLED and (
+            spend > SCALE_AD_BAD_DAY_MIN_SPEND and roas < SCALE_AD_BAD_DAY_AD_ROAS and as_roas < SCALE_AD_BAD_DAY_ADSET_ROAS
+        ):
+            return "bad day"
+        if SCALE_AD_HOG_ENABLED and _is_scale_campaign(ad["campaign_name"]):
+            share = spend / as_spend if as_spend > 0 else 0
+            if (spend > SCALE_AD_HOG_MIN_SPEND and share >= SCALE_AD_HOG_SHARE
+                    and roas < SCALE_AD_HOG_AD_ROAS and as_roas < SCALE_AD_HOG_ADSET_ROAS):
+                return "budget hog"
+        return None
+
+    scale_ad_restart = 0
+    scale_ad_restart_fail = 0
+    restart_floors = [
+        floor for enabled, floor in (
+            (SCALE_CBO_AD_ATC_ENABLED, min(SCALE_CBO_AD_ATC_A_SPEND, SCALE_CBO_AD_ATC_B_SPEND, SCALE_CBO_AD_ATC_C_SPEND)),
+            (SCALE_AD_BAD_DAY_ENABLED, SCALE_AD_BAD_DAY_MIN_SPEND),
+            (SCALE_AD_HOG_ENABLED, SCALE_AD_HOG_MIN_SPEND),
+        ) if enabled
+    ]
+    if restart_floors:
+        restart_floor = min(restart_floors)
+        paused_now = {a.ad_id for a in actions if a.action in ("paused", "would_pause")}
+        for ad_id, ad in today_ads.items():
+            if not (_is_scale_campaign(ad["campaign_name"]) or _is_cbo_campaign(ad["campaign_name"])):
+                continue
+            if ad_id in paused_now:
+                continue
+            info = ad_info.get(ad_id, {})
+            if info.get("status") != "PAUSED":
+                continue
+            current_ad_name = info.get("name", ad["ad_name"])
+            current_adset_name = info.get("adset_name", ad["adset_name"])
+            if any(m in current_adset_name.upper() for m in ("OFF", "RUN")):
+                continue
+            if any(m in current_ad_name.upper() for m in ("OFF", "RUN")):
+                continue
+            if ad["spend"] <= restart_floor or _scale_ad_pause_reason(ad) is not None:
+                continue
+
+            spend = ad["spend"]
+            roas = ad["roas"]
+            atcs = ad.get("atcs", 0)
+            atc_txt = "0 ATCs" if atcs == 0 else f"cost/ATC ${spend / atcs:.2f}"
+            why = f"no ad rule applies now: spend ${spend:.2f}, ROAS {roas:.2f}, {atc_txt}"
+            if dry_run:
+                action, reason = "would_activate", f"dry run ({why})"
+            else:
+                success, reason = _update_ad_status(config, ad_id, "ACTIVE")
+                if success:
+                    action, reason = "activated", why
+                    scale_ad_restart += 1
+                    logger.info(f"SCALE/CBO AD RESTART: Activated {ad_id} ({current_ad_name}) — {why}")
+                else:
+                    action = "failed"
+                    scale_ad_restart_fail += 1
+                    logger.warning(f"SCALE/CBO AD RESTART: Failed to activate {ad_id}: {reason}")
+            as_data = adset_roas.get(ad["adset_id"], {})
+            actions.append(StopLossAction(
+                ad_id=ad_id, ad_name=current_ad_name,
+                campaign_name=ad["campaign_name"], adset_name=current_adset_name,
+                action=action, reason=reason,
+                spend=spend, roas=roas, revenue=ad["revenue"], purchases=ad["purchases"],
+                adset_spend=as_data.get("spend", 0), adset_roas=as_data.get("roas", 0),
+            ))
+
     # === TESTING ad-level stop-loss / restart (rolling 7d metrics) ===
     testing_ad_stop = 0
     testing_ad_restart = 0
@@ -1641,7 +1782,9 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         f"AD (SCALE+CBO): {scale_cbo_ad_stop} paused, {scale_cbo_ad_restart} activated, {scale_cbo_ad_fail} failed │ "
         f"AD (SCALE hog): {scale_hog_stop} paused, {scale_hog_fail} failed │ "
         f"AD (SCALE/CBO bad day): {bad_day_stop} paused, {bad_day_fail} failed │ "
-        f"AD (SCALE/CBO cost/ATC): {atc_stop} paused, {atc_fail} failed"
+        f"AD (SCALE/CBO cost/ATC): {atc_stop} paused, {atc_fail} failed │ "
+        f"AD (SCALE/CBO restart): {scale_ad_restart} activated, {scale_ad_restart_fail} failed │ "
+        f"AD (TESTING cull restart): {testing_cull_restart} activated"
     )
     return actions, adset_actions
 
