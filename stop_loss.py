@@ -219,7 +219,7 @@ SCALE_AD_BAD_DAY_ADSET_ROAS = 1.5
 #   C: ad spend > $150 & ROAS < 1.2 (any cost/ATC)     -> pause
 #   0 ATCs counts as an expensive cost/ATC.
 #   never pauses the last active ad in an adset; skips OFF/RUN names
-SCALE_CBO_AD_ATC_ENABLED = True
+SCALE_CBO_AD_ATC_ENABLED = False
 SCALE_CBO_AD_ATC_A_SPEND = 50.0
 SCALE_CBO_AD_ATC_A_MAX_CPA = 15.0
 SCALE_CBO_AD_ATC_B_SPEND = 100.0
