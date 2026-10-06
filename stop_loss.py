@@ -89,7 +89,7 @@ SCALE_ADSET_ROAS_THRESHOLD = 1.2
 #     skip the cart). Protected if ATCs >= 3 & CPA/ATC < $6.
 #   ROAS check: spend > $100 & ROAS < 1.4
 #   Restart:    PAUSED + spend > $50 & neither check above would pause it
-TESTING_ADSET_ENABLED = True
+TESTING_ADSET_ENABLED = False
 TESTING_ADSET_EARLY_ENABLED = True
 TESTING_ADSET_EARLY_SPEND = 50.0
 TESTING_ADSET_EARLY_COST_PER_EVENT = 12.0
