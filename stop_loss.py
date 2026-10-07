@@ -2,8 +2,6 @@
 Intra-day stop-loss. Runs every 15 min.
 
 Rules:
-- SCALE + CBO adsets: only campaigns containing "Highest Volume", and never
-  ones containing "Cost Cap" or "Bid Cap".
 - SCALE adsets (today's metrics):
     stop:    ACTIVE + spend>$1000 & ROAS<1.0
     restart: PAUSED + spend>$1000 & ROAS>=1.0 (intra-day if ROAS improves)
@@ -242,9 +240,6 @@ SCALE_CBO_AD_ATC_C_ROAS = 1.2
 #   never pauses the last active ad in an adset; skips OFF/RUN names
 HIGHEST_VOLUME_AD_ENABLED = True
 HIGHEST_VOLUME_KEYWORD = "HIGHEST VOLUME"
-# SCALE + CBO adset stop-loss only applies to Highest Volume campaigns, and
-# never to campaigns whose name contains one of these.
-ADSET_STOP_LOSS_EXCLUDE_KEYWORDS = ("COST CAP", "BID CAP")
 HIGHEST_VOLUME_AD_SPEND = 100.0
 HIGHEST_VOLUME_AD_ROAS = 1.2
 HIGHEST_VOLUME_AD_MAX_CPA = 15.0
@@ -612,17 +607,6 @@ def _is_testing_campaign(campaign_name: str) -> bool:
     return "TESTING" in campaign_name.upper()
 
 
-def _is_highest_volume_campaign(campaign_name: str) -> bool:
-    """Match campaign name containing "Highest Volume" (any case/spacing)."""
-    return HIGHEST_VOLUME_KEYWORD in " ".join(campaign_name.upper().split())
-
-
-def _is_capped_campaign(campaign_name: str) -> bool:
-    """Match campaign name containing "Cost Cap" or "Bid Cap"."""
-    name = " ".join(campaign_name.upper().split())
-    return any(k in name for k in ADSET_STOP_LOSS_EXCLUDE_KEYWORDS)
-
-
 def _is_cbo_campaign(campaign_name: str) -> bool:
     """Match campaign name containing CBO as a whole word."""
     parts = [p.strip() for p in campaign_name.upper().replace("|", " ").split()]
@@ -665,26 +649,21 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         if not ad["adset_id"]:
             continue
         campaign_name = ad["campaign_name"]
-        # SCALE / CBO adset stop-loss only runs in "Highest Volume" campaigns,
-        # never in Cost Cap / Bid Cap ones. Highest Volume campaigns without
-        # SCALE or CBO in the name use the SCALE rule (same thresholds).
-        if (_is_cbo_campaign(campaign_name) or _is_scale_campaign(campaign_name)
-                or _is_highest_volume_campaign(campaign_name)):
-            if not _is_highest_volume_campaign(campaign_name) or _is_capped_campaign(campaign_name):
-                continue
-            if _is_cbo_campaign(campaign_name):
-                if CBO_ADSET_ENABLED:
-                    cbo_adset_ids.add(ad["adset_id"])
-                    adset_meta[ad["adset_id"]] = {
-                        "adset_name": ad["adset_name"],
-                        "campaign_name": campaign_name,
-                    }
-            elif SCALE_ADSET_ENABLED:
-                scale_adset_ids.add(ad["adset_id"])
+        # CBO campaigns never fall through to the SCALE rule, even when the
+        # CBO rule is off ("SCALE | CBO | ..." stays unmanaged at adset level).
+        if _is_cbo_campaign(campaign_name):
+            if CBO_ADSET_ENABLED:
+                cbo_adset_ids.add(ad["adset_id"])
                 adset_meta[ad["adset_id"]] = {
                     "adset_name": ad["adset_name"],
                     "campaign_name": campaign_name,
                 }
+        elif SCALE_ADSET_ENABLED and _is_scale_campaign(campaign_name):
+            scale_adset_ids.add(ad["adset_id"])
+            adset_meta[ad["adset_id"]] = {
+                "adset_name": ad["adset_name"],
+                "campaign_name": campaign_name,
+            }
         elif (TESTING_ADSET_ENABLED or TESTING_AD_CULL_ENABLED) and _is_testing_campaign(campaign_name):
             testing_adset_ids.add(ad["adset_id"])
             adset_meta[ad["adset_id"]] = {
@@ -1709,6 +1688,9 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
     hv_fail = 0
 
     if HIGHEST_VOLUME_AD_ENABLED:
+        def _hv_campaign(name: str) -> bool:
+            return HIGHEST_VOLUME_KEYWORD in " ".join(name.upper().split())
+
         def _hv_fails(ad: dict) -> bool:
             atcs = ad.get("atcs", 0)
             cost_per_atc = ad["spend"] / atcs if atcs > 0 else float("inf")
@@ -1723,7 +1705,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 active_per_adset[ad["adset_id"]] += 1
 
         for ad_id, ad in sorted(today_ads.items(), key=lambda x: -x[1]["spend"]):
-            if not _is_highest_volume_campaign(ad["campaign_name"]) or ad_id in paused_now:
+            if not _hv_campaign(ad["campaign_name"]) or ad_id in paused_now:
                 continue
             info = ad_info.get(ad_id, {})
             status = info.get("status")
