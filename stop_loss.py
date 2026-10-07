@@ -238,7 +238,7 @@ SCALE_CBO_AD_ATC_C_ROAS = 1.2
 #   Restart: PAUSED + spend > $100 & the pause condition no longer holds;
 #            otherwise midnight restart (no OFF marker).
 #   never pauses the last active ad in an adset; skips OFF/RUN names
-HIGHEST_VOLUME_AD_ENABLED = True
+HIGHEST_VOLUME_AD_ENABLED = False
 HIGHEST_VOLUME_KEYWORD = "HIGHEST VOLUME"
 HIGHEST_VOLUME_AD_SPEND = 100.0
 HIGHEST_VOLUME_AD_ROAS = 1.2

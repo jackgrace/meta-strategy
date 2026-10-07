@@ -31,6 +31,7 @@ from main import (
     run_testing_retire,
     run_surf_reset,
     run_scale_retire,
+    run_testing_ad_rules,
 )
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._run_surf_reset_endpoint(source="http")
         elif self.path == "/scale-retire":
             self._run_scale_retire_endpoint(source="http")
+        elif self.path == "/testing-ad-rules":
+            self._run_testing_ad_rules_endpoint(source="http")
         else:
             self._respond(404, {"error": "not found"})
 
@@ -174,6 +177,15 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(200, result)
         except Exception as e:
             logger.error(f"Ad kill 3d failed: {e}")
+            self._respond(500, {"status": "error", "message": str(e)})
+
+    def _run_testing_ad_rules_endpoint(self, source: str):
+        logger.info(f"Manual trigger via {source} — testing ad rules")
+        try:
+            result = run_testing_ad_rules()
+            self._respond(200, result)
+        except Exception as e:
+            logger.error(f"Testing ad rules failed: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
 
     def _run_scale_retire_endpoint(self, source: str):
@@ -480,6 +492,12 @@ def _run_stop_loss_scheduler():
         except Exception as e:
             logger.error(f"Scale retire failed: {e}")
             _send_stop_loss_failure(f"scale-retire: {type(e).__name__}: {e}")
+        try:
+            logger.info("Scheduler: running 15-min testing ad rules (7d)")
+            run_testing_ad_rules()
+        except Exception as e:
+            logger.error(f"Testing ad rules failed: {e}")
+            _send_stop_loss_failure(f"testing-ad-rules: {type(e).__name__}: {e}")
         time.sleep(15 * 60)
 
 
