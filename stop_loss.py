@@ -33,6 +33,10 @@ Rules:
     branch B: ad spend>$120 (any CPA/ATC) -> pause  (grace-then-cut)
     restart: PAUSED + adset ROAS>=1.6 & ad ROAS>=1.8  (adset hysteresis)
     (skip RUN/OFF in ad name, OFF in adset name)
+- Highest Volume ads (today's metrics, campaign name contains HIGHEST VOLUME):
+    pause:   ad spend>$100 & ROAS<1.2 & cost/ATC>$15 (0 ATCs counts)
+    restart: PAUSED + spend>$100 & pause condition no longer holds (else midnight)
+    (never last active ad; skip OFF/RUN)
 - SCALE + CBO ad cost/ATC stop (today's metrics):
     A: ad spend>$50 & cost/ATC>$15 (0 ATCs counts) -> pause
     B: ad spend>$100 & ROAS<1.2 & cost/ATC>$10 -> pause
@@ -227,6 +231,18 @@ SCALE_CBO_AD_ATC_B_ROAS = 1.2
 SCALE_CBO_AD_ATC_B_MAX_CPA = 10.0
 SCALE_CBO_AD_ATC_C_SPEND = 150.0
 SCALE_CBO_AD_ATC_C_ROAS = 1.2
+
+# "Highest Volume" campaigns — ad-level rule (today's metrics).
+#   Pause:   ad spend > $100 & ROAS < 1.2 & cost/ATC > $15 (0 ATCs counts)
+#            ROAS >= 1.2 always keeps the ad on, whatever the cost/ATC.
+#   Restart: PAUSED + spend > $100 & the pause condition no longer holds;
+#            otherwise midnight restart (no OFF marker).
+#   never pauses the last active ad in an adset; skips OFF/RUN names
+HIGHEST_VOLUME_AD_ENABLED = True
+HIGHEST_VOLUME_KEYWORD = "HIGHEST VOLUME"
+HIGHEST_VOLUME_AD_SPEND = 100.0
+HIGHEST_VOLUME_AD_ROAS = 1.2
+HIGHEST_VOLUME_AD_MAX_CPA = 15.0
 
 
 @dataclass
@@ -1666,6 +1682,88 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                 adset_spend=as_data.get("spend", 0), adset_roas=as_data.get("roas", 0),
             ))
 
+    # === Highest Volume ad stop-loss / restart (today's metrics) ===
+    hv_stop = 0
+    hv_restart = 0
+    hv_fail = 0
+
+    if HIGHEST_VOLUME_AD_ENABLED:
+        def _hv_campaign(name: str) -> bool:
+            return HIGHEST_VOLUME_KEYWORD in " ".join(name.upper().split())
+
+        def _hv_fails(ad: dict) -> bool:
+            atcs = ad.get("atcs", 0)
+            cost_per_atc = ad["spend"] / atcs if atcs > 0 else float("inf")
+            return (ad["spend"] > HIGHEST_VOLUME_AD_SPEND
+                    and ad["roas"] < HIGHEST_VOLUME_AD_ROAS
+                    and cost_per_atc > HIGHEST_VOLUME_AD_MAX_CPA)
+
+        paused_now = {a.ad_id for a in actions if a.action in ("paused", "would_pause")}
+        active_per_adset: dict[str, int] = defaultdict(int)
+        for ad_id, ad in today_ads.items():
+            if ad_info.get(ad_id, {}).get("status") == "ACTIVE" and ad_id not in paused_now:
+                active_per_adset[ad["adset_id"]] += 1
+
+        for ad_id, ad in sorted(today_ads.items(), key=lambda x: -x[1]["spend"]):
+            if not _hv_campaign(ad["campaign_name"]) or ad_id in paused_now:
+                continue
+            info = ad_info.get(ad_id, {})
+            status = info.get("status")
+            current_ad_name = info.get("name", ad["ad_name"])
+            current_adset_name = info.get("adset_name", ad["adset_name"])
+            if any(m in current_adset_name.upper() for m in ("OFF", "RUN")):
+                continue
+            if any(m in current_ad_name.upper() for m in ("OFF", "RUN")):
+                continue
+
+            spend = ad["spend"]
+            roas = ad["roas"]
+            atcs = ad.get("atcs", 0)
+            atc_txt = "0 ATCs" if atcs == 0 else f"cost/ATC ${spend / atcs:.2f}"
+            adset_id = ad["adset_id"]
+            fails = _hv_fails(ad)
+
+            if status == "ACTIVE" and fails:
+                if active_per_adset[adset_id] <= 1:
+                    continue
+                why = (f"spend ${spend:.2f}>${HIGHEST_VOLUME_AD_SPEND:.0f} & ROAS {roas:.2f}<{HIGHEST_VOLUME_AD_ROAS} "
+                       f"& {atc_txt} (>${HIGHEST_VOLUME_AD_MAX_CPA:.0f})")
+                new_status, verb = "PAUSED", "pause"
+            elif status == "PAUSED" and spend > HIGHEST_VOLUME_AD_SPEND and not fails:
+                why = f"recovered: spend ${spend:.2f}, ROAS {roas:.2f}, {atc_txt}"
+                new_status, verb = "ACTIVE", "activate"
+            else:
+                continue
+
+            if dry_run:
+                action, reason = f"would_{verb}", f"dry run ({why})"
+                if verb == "pause":
+                    active_per_adset[adset_id] -= 1
+            else:
+                success, reason = _update_ad_status(config, ad_id, new_status)
+                if success:
+                    action = "paused" if verb == "pause" else "activated"
+                    reason = why
+                    if verb == "pause":
+                        hv_stop += 1
+                        active_per_adset[adset_id] -= 1
+                    else:
+                        hv_restart += 1
+                    logger.info(f"HIGHEST VOLUME AD {verb.upper()}: {ad_id} ({current_ad_name}) — {why}")
+                else:
+                    action = "failed"
+                    hv_fail += 1
+                    logger.warning(f"HIGHEST VOLUME AD {verb.upper()}: failed on {ad_id}: {reason}")
+
+            as_data = adset_roas.get(adset_id, {})
+            actions.append(StopLossAction(
+                ad_id=ad_id, ad_name=current_ad_name,
+                campaign_name=ad["campaign_name"], adset_name=current_adset_name,
+                action=action, reason=reason,
+                spend=spend, roas=roas, revenue=ad["revenue"], purchases=ad["purchases"],
+                adset_spend=as_data.get("spend", 0), adset_roas=as_data.get("roas", 0),
+            ))
+
     # === TESTING ad-level stop-loss / restart (rolling 7d metrics) ===
     testing_ad_stop = 0
     testing_ad_restart = 0
@@ -1784,7 +1882,8 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         f"AD (SCALE/CBO bad day): {bad_day_stop} paused, {bad_day_fail} failed │ "
         f"AD (SCALE/CBO cost/ATC): {atc_stop} paused, {atc_fail} failed │ "
         f"AD (SCALE/CBO restart): {scale_ad_restart} activated, {scale_ad_restart_fail} failed │ "
-        f"AD (TESTING cull restart): {testing_cull_restart} activated"
+        f"AD (TESTING cull restart): {testing_cull_restart} activated │ "
+        f"AD (Highest Volume): {hv_stop} paused, {hv_restart} activated, {hv_fail} failed"
     )
     return actions, adset_actions
 
@@ -1842,6 +1941,7 @@ def build_stop_loss_slack_message(
             f"_TESTING surf: {('ON — spend>='+str(int(TESTING_SURF_SPEND_SHARE*100))+'% of budget & ROAS>='+str(TESTING_SURF_MIN_ROAS)+' → 2x budget (cap $'+str(int(TESTING_SURF_MAX_BUDGET))+'), reset to $'+str(int(TESTING_SURF_BASE_BUDGET))+' at midnight') if TESTING_SURF_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_TESTING ad (7d): {'ON' if TESTING_AD_7D_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_CBO adset: {'ON — stop spend>$'+str(int(CBO_ADSET_SPEND_THRESHOLD))+' & ROAS<'+str(CBO_ADSET_ROAS_THRESHOLD)+', restart mirror' if CBO_ADSET_ENABLED else 'PAUSED (flag off)'}_\n"
+            f"_Highest Volume ad: {('ON — spend>$'+str(int(HIGHEST_VOLUME_AD_SPEND))+' & ROAS<'+str(HIGHEST_VOLUME_AD_ROAS)+' & cost/ATC>$'+str(int(HIGHEST_VOLUME_AD_MAX_CPA))+', restart when it no longer applies') if HIGHEST_VOLUME_AD_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_SCALE/CBO ad cost/ATC: {('ON — spend>$'+str(int(SCALE_CBO_AD_ATC_A_SPEND))+' & cost/ATC>$'+str(int(SCALE_CBO_AD_ATC_A_MAX_CPA))+' | spend>$'+str(int(SCALE_CBO_AD_ATC_B_SPEND))+' & ROAS<'+str(SCALE_CBO_AD_ATC_B_ROAS)+' & cost/ATC>$'+str(int(SCALE_CBO_AD_ATC_B_MAX_CPA))+' | spend>$'+str(int(SCALE_CBO_AD_ATC_C_SPEND))+' & ROAS<'+str(SCALE_CBO_AD_ATC_C_ROAS)+', back on at midnight') if SCALE_CBO_AD_ATC_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_SCALE/CBO ad bad day: {('ON — ad spend>$'+str(int(SCALE_AD_BAD_DAY_MIN_SPEND))+' & ad ROAS<'+str(SCALE_AD_BAD_DAY_AD_ROAS)+' & adset ROAS<'+str(SCALE_AD_BAD_DAY_ADSET_ROAS)+', back on at midnight') if SCALE_AD_BAD_DAY_ENABLED else 'PAUSED (flag off)'}_\n"
             f"_SCALE ad hog: {('ON — ad spend>$'+str(int(SCALE_AD_HOG_MIN_SPEND))+' & >='+str(int(SCALE_AD_HOG_SHARE*100))+'% of adset spend & ad ROAS<'+str(SCALE_AD_HOG_AD_ROAS)+' & adset ROAS<'+str(SCALE_AD_HOG_ADSET_ROAS)+', never last ad') if SCALE_AD_HOG_ENABLED else 'PAUSED (flag off)'}_\n"
