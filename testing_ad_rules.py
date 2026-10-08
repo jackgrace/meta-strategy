@@ -244,8 +244,13 @@ def _scale_reason(ad: dict, peer_cpa: float, peer_atc_to_p: float) -> str | None
     return None
 
 
-def evaluate(rows: list[dict], as_of: date) -> dict[str, str]:
-    """ad_id -> reason for every ad failing a rule on `as_of`."""
+def evaluate(rows: list[dict], as_of: date, for_restart: bool = False) -> dict[str, str]:
+    """ad_id -> reason for every ad failing a rule on `as_of`.
+
+    for_restart: drop the hog's 40%-share condition. A paused hog stops
+    spending while the rest of its adset keeps going, so its share falls on
+    its own; only real recovery (ad or adset ROAS) should bring it back.
+    """
     window = [r for r in rows if as_of - timedelta(days=LOOKBACK_DAYS - 1) <= r["date"] <= as_of]
     day = [r for r in rows if r["date"] == as_of]
     ads7 = _aggregate(window, "ad_id")
@@ -288,7 +293,8 @@ def evaluate(rows: list[dict], as_of: date) -> dict[str, str]:
             roas = t["revenue"] / spend if spend else 0
             share = spend / s["spend"] if s["spend"] else 0
             as_roas = s["revenue"] / s["spend"] if s["spend"] else 0
-            if spend > HOG_SPEND and share >= HOG_SHARE and roas < HOG_AD_ROAS and as_roas < HOG_ADSET_ROAS:
+            share_ok = for_restart or share >= HOG_SHARE
+            if spend > HOG_SPEND and share_ok and roas < HOG_AD_ROAS and as_roas < HOG_ADSET_ROAS:
                 reasons[ad_id] = (f"budget hog: day spend ${spend:.2f} = {share:.0%} of adset, "
                                   f"ad ROAS {roas:.2f}<{HOG_AD_ROAS}, adset ROAS {as_roas:.2f}<{HOG_ADSET_ROAS}")
     return reasons
@@ -328,9 +334,10 @@ def run_testing_ad_rules(config: Config, dry_run: bool = False) -> list[TestingA
     today = _today()
     rows = _fetch_rows(config, today - timedelta(days=LOOKBACK_DAYS - 1), today)
     flagged = evaluate(rows, today)
+    still_bad = evaluate(rows, today, for_restart=True)
     ads7 = _aggregate(rows, "ad_id")
     today_ads = _aggregate([r for r in rows if r["date"] == today], "ad_id")
-    recover = {a for a, t in today_ads.items() if t["spend"] >= FRESH_SPEND and a not in flagged}
+    recover = {a for a, t in today_ads.items() if t["spend"] >= FRESH_SPEND and a not in still_bad}
     if not (flagged or recover):
         return []
 
