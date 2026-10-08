@@ -10,7 +10,7 @@ An ACTIVE ad is paused and marked " - OFF" if any of:
                            OR (ad cost/ATC > 1.5x campaign avg & ad 7d ROAS < 1.4))
 SCALE campaigns (SCALE as a word in the name, incl. SCALE | CBO): baseline
 is the ad's own adset over the same 7 days. An ACTIVE ad is paused + OFF if:
-  ad 7d spend > $150 & ROAS < 1.2
+  ad 7d spend > $125 & ROAS < 1.2
   & cost/ATC > 1.3x adset avg cost/ATC                     (0 ATCs counts)
   & ATC-to-purchase rate < adset avg (purchases / ATCs)
 Skips ads / adsets with OFF or RUN in the name. Testing ads are never
@@ -38,7 +38,7 @@ TESTING_AD_RULES_ENABLED = True
 CAMPAIGN_KEYWORDS = ("TESTING", "TRYBE")
 
 SCALE_AD_RULE_ENABLED = True
-SCALE_SPEND = 150.0
+SCALE_SPEND = 125.0
 SCALE_ROAS = 1.2
 SCALE_CPA_MULT = 1.3
 LOOKBACK_DAYS = 7
