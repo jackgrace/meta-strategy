@@ -225,7 +225,7 @@ def run_surf_reset() -> dict:
 
 
 def run_testing_ad_rules() -> dict:
-    """Every 15 min: TESTING ad rules vs campaign 7d averages (pause + mark OFF)."""
+    """Every 15 min: TESTING + TRYBE ad rules vs campaign 7d averages (pause + mark OFF)."""
     dry_run = _dry_run()
     mode = "DRY RUN" if dry_run else "LIVE"
     per_account = []

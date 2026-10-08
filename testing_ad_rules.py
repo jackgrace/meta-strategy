@@ -1,7 +1,7 @@
 """
 TESTING ad rules (last 7 days incl. today). Runs every 15 minutes.
 
-For each campaign with TESTING in the name, the campaign's 7-day average
+For each campaign with TESTING or TRYBE in the name, the campaign's 7-day average
 CPC (spend / link clicks) and cost per ATC (spend / ATCs) are the baseline.
 An ACTIVE ad is paused and marked " - OFF" if any of:
   1. ad 7d spend > $30  & ad CPC > 3x campaign avg CPC       (0 clicks counts)
@@ -23,13 +23,14 @@ import requests
 from config import Config
 from meta_api import API_BASE, fetch_ad_statuses
 from scale_retire import _rename
-from stop_loss import _is_testing_campaign, _update_ad_status
+from stop_loss import _update_ad_status
 
 logger = logging.getLogger(__name__)
 
 AEST = timezone(timedelta(hours=10))
 
 TESTING_AD_RULES_ENABLED = True
+CAMPAIGN_KEYWORDS = ("TESTING", "TRYBE")
 LOOKBACK_DAYS = 7
 CPC_SPEND = 30.0
 CPC_MULT = 3.0
@@ -54,7 +55,22 @@ class TestingAdAction:
     reason: str
 
 
+def _matches(campaign_name: str) -> bool:
+    name = campaign_name.upper()
+    return any(k in name for k in CAMPAIGN_KEYWORDS)
+
+
 def _fetch_testing_ads(config: Config) -> dict[str, dict]:
+    ads: dict[str, dict] = {}
+    # Query each keyword in upper and title case in case Meta's CONTAIN
+    # filter is case-sensitive; results are merged by ad_id.
+    for keyword in sorted({v for k in CAMPAIGN_KEYWORDS for v in (k, k.title())}):
+        ads.update(_fetch_ads_for_keyword(config, keyword))
+    logger.info(f"Testing ad rules: fetched {LOOKBACK_DAYS}d metrics for {len(ads)} ads ({'/'.join(CAMPAIGN_KEYWORDS)})")
+    return ads
+
+
+def _fetch_ads_for_keyword(config: Config, keyword: str) -> dict[str, dict]:
     today = datetime.now(AEST).date()
     since = today - timedelta(days=LOOKBACK_DAYS - 1)
     url = f"{API_BASE}/{config.meta_ad_account_id}/insights"
@@ -66,7 +82,7 @@ def _fetch_testing_ads(config: Config) -> dict[str, dict]:
         "limit": 200,
         "filtering": (
             '[{"field":"impressions","operator":"GREATER_THAN","value":"0"},'
-            '{"field":"campaign.name","operator":"CONTAIN","value":"TESTING"}]'
+            '{"field":"campaign.name","operator":"CONTAIN","value":"' + keyword + '"}]'
         ),
     }
     ads: dict[str, dict] = {}
@@ -99,7 +115,7 @@ def _fetch_testing_ads(config: Config) -> dict[str, dict]:
 
         data = resp.json()
         for row in data.get("data", []):
-            if not _is_testing_campaign(row.get("campaign_name", "")):
+            if not _matches(row.get("campaign_name", "")):
                 continue
             spend = float(row.get("spend", 0))
             revenue = 0.0
@@ -124,7 +140,6 @@ def _fetch_testing_ads(config: Config) -> dict[str, dict]:
             }
         url = data.get("paging", {}).get("next")
         first = False
-    logger.info(f"Testing ad rules: fetched {LOOKBACK_DAYS}d metrics for {len(ads)} TESTING ads")
     return ads
 
 
@@ -215,7 +230,7 @@ def send_testing_ad_rules_report(actions: list[TestingAdAction], dry_run: bool, 
         for a in actions[:20]
     ]
     blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"🧪 TESTING ads retired — {len(actions)}"}},
+        {"type": "header", "text": {"type": "plain_text", "text": f"🧪 TESTING / TRYBE ads retired — {len(actions)}"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": (
             f"*[{mode}]* Last {LOOKBACK_DAYS} days vs campaign average: spend>${CPC_SPEND:.0f} & CPC>{CPC_MULT:g}x avg │ "
             f"spend>${NO_ATC_SPEND:.0f} & 0 ATCs │ spend>${ATC_SPEND:.0f} & cost/ATC>{ATC_MULT:g}x avg & ROAS<{ATC_ROAS} "
