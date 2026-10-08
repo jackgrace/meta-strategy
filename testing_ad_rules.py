@@ -343,6 +343,7 @@ def run_testing_ad_rules(config: Config, dry_run: bool = False) -> list[TestingA
     still_bad = evaluate(rows, today, for_restart=True)
     ads7 = _aggregate(rows, "ad_id")
     today_ads = _aggregate([r for r in rows if r["date"] == today], "ad_id")
+    today_adsets = _aggregate([r for r in rows if r["date"] == today], "adset_id")
     recover = {a for a, t in today_ads.items() if t["spend"] >= FRESH_SPEND and a not in still_bad}
     if not (flagged or recover):
         return []
@@ -359,8 +360,12 @@ def run_testing_ad_rules(config: Config, dry_run: bool = False) -> list[TestingA
             actions.append(_set_status(config, ad_id, t, name, adset_name, "PAUSED", "pause",
                                        flagged[ad_id] + " — paused for today (strike)", dry_run))
         elif ad_id in recover and status == "PAUSED":
-            actions.append(_set_status(config, ad_id, t, name, adset_name, "ACTIVE", "activate",
-                                       "no ad rule applies any more today", dry_run))
+            d = today_ads[ad_id]
+            s_day = today_adsets[d["meta"]["adset_id"]]
+            why = (f"no ad rule applies any more today — today: ad ${d['spend']:.2f} @ "
+                   f"{(d['revenue'] / d['spend'] if d['spend'] else 0):.2f}x, adset "
+                   f"{(s_day['revenue'] / s_day['spend'] if s_day['spend'] else 0):.2f}x")
+            actions.append(_set_status(config, ad_id, t, name, adset_name, "ACTIVE", "activate", why, dry_run))
     return actions
 
 
