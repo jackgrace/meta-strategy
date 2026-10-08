@@ -8,6 +8,11 @@ An ACTIVE ad is paused and marked " - OFF" if any of:
   2. ad 7d spend > $100 & 0 ATCs
   3. ad 7d spend > $150 & ad cost/ATC > 1.5x campaign avg    (0 ATCs counts)
                         & ad 7d ROAS < 1.2
+SCALE campaigns (SCALE as a word in the name, incl. SCALE | CBO): baseline
+is the ad's own adset over the same 7 days. An ACTIVE ad is paused + OFF if:
+  ad 7d spend > $150 & ROAS < 1.2
+  & cost/ATC > 1.3x adset avg cost/ATC                     (0 ATCs counts)
+  & ATC-to-purchase rate < adset avg (purchases / ATCs)
 Skips ads / adsets with OFF or RUN in the name. Testing ads are never
 restarted at midnight, so a retired ad stays off until OFF is removed.
 """
@@ -23,7 +28,7 @@ import requests
 from config import Config
 from meta_api import API_BASE, fetch_ad_statuses
 from scale_retire import _rename
-from stop_loss import _update_ad_status
+from stop_loss import _is_scale_campaign, _update_ad_status
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +36,11 @@ AEST = timezone(timedelta(hours=10))
 
 TESTING_AD_RULES_ENABLED = True
 CAMPAIGN_KEYWORDS = ("TESTING", "TRYBE")
+
+SCALE_AD_RULE_ENABLED = True
+SCALE_SPEND = 150.0
+SCALE_ROAS = 1.2
+SCALE_CPA_MULT = 1.3
 LOOKBACK_DAYS = 7
 CPC_SPEND = 30.0
 CPC_MULT = 3.0
@@ -60,24 +70,24 @@ def _matches(campaign_name: str) -> bool:
     return any(k in name for k in CAMPAIGN_KEYWORDS)
 
 
-def _fetch_testing_ads(config: Config) -> dict[str, dict]:
+def _fetch_ads(config: Config, keywords, matcher) -> dict[str, dict]:
     ads: dict[str, dict] = {}
     # Query each keyword in upper and title case in case Meta's CONTAIN
     # filter is case-sensitive; results are merged by ad_id.
-    for keyword in sorted({v for k in CAMPAIGN_KEYWORDS for v in (k, k.title())}):
-        ads.update(_fetch_ads_for_keyword(config, keyword))
-    logger.info(f"Testing ad rules: fetched {LOOKBACK_DAYS}d metrics for {len(ads)} ads ({'/'.join(CAMPAIGN_KEYWORDS)})")
+    for keyword in sorted({v for k in keywords for v in (k, k.title())}):
+        ads.update(_fetch_ads_for_keyword(config, keyword, matcher))
+    logger.info(f"7d ad rules: fetched {len(ads)} ads ({'/'.join(keywords)})")
     return ads
 
 
-def _fetch_ads_for_keyword(config: Config, keyword: str) -> dict[str, dict]:
+def _fetch_ads_for_keyword(config: Config, keyword: str, matcher) -> dict[str, dict]:
     today = datetime.now(AEST).date()
     since = today - timedelta(days=LOOKBACK_DAYS - 1)
     url = f"{API_BASE}/{config.meta_ad_account_id}/insights"
     params = {
         "access_token": config.meta_access_token,
         "level": "ad",
-        "fields": "ad_id,ad_name,adset_name,campaign_id,campaign_name,spend,actions,action_values",
+        "fields": "ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,spend,actions,action_values",
         "time_range": f'{{"since":"{since}","until":"{today}"}}',
         "limit": 200,
         "filtering": (
@@ -115,11 +125,11 @@ def _fetch_ads_for_keyword(config: Config, keyword: str) -> dict[str, dict]:
 
         data = resp.json()
         for row in data.get("data", []):
-            if not _matches(row.get("campaign_name", "")):
+            if not matcher(row.get("campaign_name", "")):
                 continue
             spend = float(row.get("spend", 0))
             revenue = 0.0
-            atcs = clicks = 0
+            atcs = clicks = purchases = 0
             for av in row.get("action_values", []) or []:
                 if av.get("action_type") == "purchase":
                     revenue = float(av.get("value", 0))
@@ -128,8 +138,11 @@ def _fetch_ads_for_keyword(config: Config, keyword: str) -> dict[str, dict]:
                     atcs = int(float(a.get("value", 0)))
                 elif a.get("action_type") == "link_click":
                     clicks = int(float(a.get("value", 0)))
+                elif a.get("action_type") == "purchase":
+                    purchases = int(float(a.get("value", 0)))
             ads[row["ad_id"]] = {
                 "ad_name": row.get("ad_name", "Unknown"),
+                "adset_id": row.get("adset_id", ""),
                 "adset_name": row.get("adset_name", "Unknown"),
                 "campaign_id": row.get("campaign_id", ""),
                 "campaign_name": row.get("campaign_name", "Unknown"),
@@ -137,6 +150,7 @@ def _fetch_ads_for_keyword(config: Config, keyword: str) -> dict[str, dict]:
                 "revenue": revenue,
                 "atcs": atcs,
                 "clicks": clicks,
+                "purchases": purchases,
             }
         url = data.get("paging", {}).get("next")
         first = False
@@ -159,27 +173,60 @@ def _failing_rule(ad: dict, avg_cpc: float, avg_cpa: float) -> str | None:
     return None
 
 
-def run_testing_ad_rules(config: Config, dry_run: bool = False) -> list[TestingAdAction]:
-    if not TESTING_AD_RULES_ENABLED:
-        logger.info("Testing ad rules: DISABLED via TESTING_AD_RULES_ENABLED flag — skipping")
-        return []
+def _scale_failing_rule(ad: dict, adset_cpa: float, adset_atc_to_p: float) -> str | None:
+    spend = ad["spend"]
+    roas = ad["revenue"] / spend if spend > 0 else 0
+    cpa = spend / ad["atcs"] if ad["atcs"] > 0 else float("inf")
+    atc_to_p = ad["purchases"] / ad["atcs"] if ad["atcs"] > 0 else 0.0
+    if (spend > SCALE_SPEND and roas < SCALE_ROAS
+            and adset_cpa > 0 and cpa > SCALE_CPA_MULT * adset_cpa
+            and atc_to_p < adset_atc_to_p):
+        cpa_txt = "0 ATCs" if ad["atcs"] == 0 else f"cost/ATC ${cpa:.2f}"
+        return (f"spend ${spend:.2f}>${SCALE_SPEND:.0f} & ROAS {roas:.2f}<{SCALE_ROAS} & {cpa_txt} > "
+                f"{SCALE_CPA_MULT:g}x adset avg ${adset_cpa:.2f} & ATC→purchase {atc_to_p:.0%} < adset {adset_atc_to_p:.0%}")
+    return None
 
-    ads = _fetch_testing_ads(config)
-    camp = defaultdict(lambda: {"spend": 0.0, "clicks": 0, "atcs": 0})
+
+def _group_totals(ads: dict[str, dict], key: str) -> dict:
+    totals = defaultdict(lambda: {"spend": 0.0, "clicks": 0, "atcs": 0, "purchases": 0})
     for a in ads.values():
-        c = camp[a["campaign_id"]]
-        c["spend"] += a["spend"]
-        c["clicks"] += a["clicks"]
-        c["atcs"] += a["atcs"]
+        t = totals[a[key]]
+        t["spend"] += a["spend"]
+        t["clicks"] += a["clicks"]
+        t["atcs"] += a["atcs"]
+        t["purchases"] += a["purchases"]
+    return totals
 
+
+def run_testing_ad_rules(config: Config, dry_run: bool = False) -> list[TestingAdAction]:
+    ads: dict[str, dict] = {}
     candidates: dict[str, str] = {}
-    for ad_id, a in ads.items():
-        c = camp[a["campaign_id"]]
-        avg_cpc = c["spend"] / c["clicks"] if c["clicks"] else 0
-        avg_cpa = c["spend"] / c["atcs"] if c["atcs"] else 0
-        why = _failing_rule(a, avg_cpc, avg_cpa)
-        if why:
-            candidates[ad_id] = why
+
+    if TESTING_AD_RULES_ENABLED:
+        testing_ads = _fetch_ads(config, CAMPAIGN_KEYWORDS, _matches)
+        ads.update(testing_ads)
+        camp = _group_totals(testing_ads, "campaign_id")
+        for ad_id, a in testing_ads.items():
+            c = camp[a["campaign_id"]]
+            avg_cpc = c["spend"] / c["clicks"] if c["clicks"] else 0
+            avg_cpa = c["spend"] / c["atcs"] if c["atcs"] else 0
+            why = _failing_rule(a, avg_cpc, avg_cpa)
+            if why:
+                candidates[ad_id] = why
+
+    if SCALE_AD_RULE_ENABLED:
+        # Testing/Trybe campaigns keep their own rules even if they also say SCALE.
+        scale_ads = _fetch_ads(config, ("SCALE",), lambda n: _is_scale_campaign(n) and not _matches(n))
+        ads.update(scale_ads)
+        adsets = _group_totals(scale_ads, "adset_id")
+        for ad_id, a in scale_ads.items():
+            t = adsets[a["adset_id"]]
+            adset_cpa = t["spend"] / t["atcs"] if t["atcs"] else 0
+            adset_atc_to_p = t["purchases"] / t["atcs"] if t["atcs"] else 0
+            why = _scale_failing_rule(a, adset_cpa, adset_atc_to_p)
+            if why:
+                candidates[ad_id] = why
+
     if not candidates:
         return []
 
@@ -224,17 +271,18 @@ def send_testing_ad_rules_report(actions: list[TestingAdAction], dry_run: bool, 
         return True
     mode = "DRY RUN" if dry_run else "LIVE"
     lines = [
-        f"• *{a.ad_name}* — adset `{a.adset_name}`\n"
+        f"• *{a.ad_name}* — `{a.campaign_name}` / `{a.adset_name}`\n"
         f"   7d: ${a.spend_7d:,.2f} @ {a.roas_7d:.2f}x │ _{a.reason}_"
         + ("" if a.action in ("retired", "would_retire") else f" *({a.action})*")
         for a in actions[:20]
     ]
     blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"🧪 TESTING / TRYBE ads retired — {len(actions)}"}},
+        {"type": "header", "text": {"type": "plain_text", "text": f"🧪 Ads retired (7-day rules) — {len(actions)}"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": (
-            f"*[{mode}]* Last {LOOKBACK_DAYS} days vs campaign average: spend>${CPC_SPEND:.0f} & CPC>{CPC_MULT:g}x avg │ "
+            f"*[{mode}]* Last {LOOKBACK_DAYS} days incl. today. *TESTING / TRYBE* (vs campaign avg): spend>${CPC_SPEND:.0f} & CPC>{CPC_MULT:g}x avg │ "
             f"spend>${NO_ATC_SPEND:.0f} & 0 ATCs │ spend>${ATC_SPEND:.0f} & cost/ATC>{ATC_MULT:g}x avg & ROAS<{ATC_ROAS} "
-            f"→ pause + mark OFF. Remove OFF from the name to bring one back."
+            f"→ pause + mark OFF.\n*SCALE* (vs adset avg): spend>${SCALE_SPEND:.0f} & ROAS<{SCALE_ROAS} & cost/ATC>{SCALE_CPA_MULT:g}x avg "
+            f"& ATC→purchase < avg → pause + mark OFF. Remove OFF from the name to bring one back."
         )}]},
         {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}},
     ]
