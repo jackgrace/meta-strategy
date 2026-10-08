@@ -11,8 +11,8 @@ An ACTIVE ad is paused and marked " - OFF" if any of:
 SCALE campaigns (SCALE as a word in the name, incl. SCALE | CBO): baseline
 is the ad's own adset over the same 7 days. An ACTIVE ad is paused + OFF if:
   ad 7d spend > $125 & ROAS < 1.2
-  & cost/ATC > 1.3x adset avg cost/ATC                     (0 ATCs counts)
-  & ATC-to-purchase rate < adset avg (purchases / ATCs)
+  & (cost/ATC > 1.3x adset avg cost/ATC                   (0 ATCs counts)
+     OR ATC-to-purchase rate < 0.7x adset avg (purchases / ATCs))
 Skips ads / adsets with OFF or RUN in the name. Testing ads are never
 restarted at midnight, so a retired ad stays off until OFF is removed.
 """
@@ -41,6 +41,7 @@ SCALE_AD_RULE_ENABLED = True
 SCALE_SPEND = 125.0
 SCALE_ROAS = 1.2
 SCALE_CPA_MULT = 1.3
+SCALE_ATC_TO_P_MULT = 0.7   # ATC-to-purchase rate 30% below adset avg
 LOOKBACK_DAYS = 7
 CPC_SPEND = 30.0
 CPC_MULT = 3.0
@@ -180,12 +181,15 @@ def _scale_failing_rule(ad: dict, adset_cpa: float, adset_atc_to_p: float) -> st
     roas = ad["revenue"] / spend if spend > 0 else 0
     cpa = spend / ad["atcs"] if ad["atcs"] > 0 else float("inf")
     atc_to_p = ad["purchases"] / ad["atcs"] if ad["atcs"] > 0 else 0.0
-    if (spend > SCALE_SPEND and roas < SCALE_ROAS
-            and adset_cpa > 0 and cpa > SCALE_CPA_MULT * adset_cpa
-            and atc_to_p < adset_atc_to_p):
+    if not (spend > SCALE_SPEND and roas < SCALE_ROAS):
+        return None
+    base = f"spend ${spend:.2f}>${SCALE_SPEND:.0f} & ROAS {roas:.2f}<{SCALE_ROAS}"
+    if adset_cpa > 0 and cpa > SCALE_CPA_MULT * adset_cpa:
         cpa_txt = "0 ATCs" if ad["atcs"] == 0 else f"cost/ATC ${cpa:.2f}"
-        return (f"spend ${spend:.2f}>${SCALE_SPEND:.0f} & ROAS {roas:.2f}<{SCALE_ROAS} & {cpa_txt} > "
-                f"{SCALE_CPA_MULT:g}x adset avg ${adset_cpa:.2f} & ATC→purchase {atc_to_p:.0%} < adset {adset_atc_to_p:.0%}")
+        return f"{base} & {cpa_txt} > {SCALE_CPA_MULT:g}x adset avg ${adset_cpa:.2f}"
+    if adset_atc_to_p > 0 and atc_to_p < SCALE_ATC_TO_P_MULT * adset_atc_to_p:
+        return (f"{base} & ATC→purchase {atc_to_p:.0%} < {SCALE_ATC_TO_P_MULT:g}x adset avg "
+                f"{adset_atc_to_p:.0%}")
     return None
 
 
@@ -283,8 +287,8 @@ def send_testing_ad_rules_report(actions: list[TestingAdAction], dry_run: bool, 
         {"type": "context", "elements": [{"type": "mrkdwn", "text": (
             f"*[{mode}]* Last {LOOKBACK_DAYS} days incl. today. *TESTING / TRYBE* (vs campaign avg): spend>${CPC_SPEND:.0f} & CPC>{CPC_MULT:g}x avg │ "
             f"spend>${NO_ATC_SPEND:.0f} & 0 ATCs │ spend>${ATC_SPEND:.0f} & (0 purchases OR (cost/ATC>{ATC_MULT:g}x avg & ROAS<{ATC_ROAS})) "
-            f"→ pause + mark OFF.\n*SCALE* (vs adset avg): spend>${SCALE_SPEND:.0f} & ROAS<{SCALE_ROAS} & cost/ATC>{SCALE_CPA_MULT:g}x avg "
-            f"& ATC→purchase < avg → pause + mark OFF. Remove OFF from the name to bring one back."
+            f"→ pause + mark OFF.\n*SCALE* (vs adset avg): spend>${SCALE_SPEND:.0f} & ROAS<{SCALE_ROAS} & (cost/ATC>{SCALE_CPA_MULT:g}x avg "
+            f"OR ATC→purchase<{SCALE_ATC_TO_P_MULT:g}x avg) → pause + mark OFF. Remove OFF from the name to bring one back."
         )}]},
         {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}},
     ]
