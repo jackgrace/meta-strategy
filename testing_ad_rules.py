@@ -5,9 +5,9 @@ For each campaign with TESTING or TRYBE in the name, the campaign's 7-day averag
 CPC (spend / link clicks) and cost per ATC (spend / ATCs) are the baseline.
 An ACTIVE ad is paused and marked " - OFF" if any of:
   1. ad 7d spend > $30  & ad CPC > 3x campaign avg CPC       (0 clicks counts)
-  2. ad 7d spend > $100 & 0 ATCs
-  3. ad 7d spend > $150 & ad cost/ATC > 1.5x campaign avg    (0 ATCs counts)
-                        & ad 7d ROAS < 1.2
+  2. ad 7d spend > $60  & 0 ATCs
+  3. ad 7d spend > $125 & (0 purchases
+                           OR (ad cost/ATC > 1.5x campaign avg & ad 7d ROAS < 1.4))
 SCALE campaigns (SCALE as a word in the name, incl. SCALE | CBO): baseline
 is the ad's own adset over the same 7 days. An ACTIVE ad is paused + OFF if:
   ad 7d spend > $150 & ROAS < 1.2
@@ -44,10 +44,10 @@ SCALE_CPA_MULT = 1.3
 LOOKBACK_DAYS = 7
 CPC_SPEND = 30.0
 CPC_MULT = 3.0
-NO_ATC_SPEND = 100.0
-ATC_SPEND = 150.0
+NO_ATC_SPEND = 60.0
+ATC_SPEND = 125.0
 ATC_MULT = 1.5
-ATC_ROAS = 1.2
+ATC_ROAS = 1.4
 
 # ad_id -> date a rename failure was last posted to Slack (in-memory).
 _rename_failure_reported: dict[str, object] = {}
@@ -167,6 +167,8 @@ def _failing_rule(ad: dict, avg_cpc: float, avg_cpa: float) -> str | None:
         return f"spend ${spend:.2f}>${CPC_SPEND:.0f} & {cpc_txt} > {CPC_MULT:g}x campaign avg ${avg_cpc:.2f}"
     if spend > NO_ATC_SPEND and ad["atcs"] == 0:
         return f"spend ${spend:.2f}>${NO_ATC_SPEND:.0f} & 0 ATCs"
+    if spend > ATC_SPEND and ad["purchases"] == 0:
+        return f"spend ${spend:.2f}>${ATC_SPEND:.0f} & 0 purchases"
     if spend > ATC_SPEND and avg_cpa > 0 and cpa > ATC_MULT * avg_cpa and roas < ATC_ROAS:
         return (f"spend ${spend:.2f}>${ATC_SPEND:.0f} & cost/ATC ${cpa:.2f} > {ATC_MULT:g}x campaign avg "
                 f"${avg_cpa:.2f} & ROAS {roas:.2f}<{ATC_ROAS}")
@@ -280,7 +282,7 @@ def send_testing_ad_rules_report(actions: list[TestingAdAction], dry_run: bool, 
         {"type": "header", "text": {"type": "plain_text", "text": f"🧪 Ads retired (7-day rules) — {len(actions)}"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": (
             f"*[{mode}]* Last {LOOKBACK_DAYS} days incl. today. *TESTING / TRYBE* (vs campaign avg): spend>${CPC_SPEND:.0f} & CPC>{CPC_MULT:g}x avg │ "
-            f"spend>${NO_ATC_SPEND:.0f} & 0 ATCs │ spend>${ATC_SPEND:.0f} & cost/ATC>{ATC_MULT:g}x avg & ROAS<{ATC_ROAS} "
+            f"spend>${NO_ATC_SPEND:.0f} & 0 ATCs │ spend>${ATC_SPEND:.0f} & (0 purchases OR (cost/ATC>{ATC_MULT:g}x avg & ROAS<{ATC_ROAS})) "
             f"→ pause + mark OFF.\n*SCALE* (vs adset avg): spend>${SCALE_SPEND:.0f} & ROAS<{SCALE_ROAS} & cost/ATC>{SCALE_CPA_MULT:g}x avg "
             f"& ATC→purchase < avg → pause + mark OFF. Remove OFF from the name to bring one back."
         )}]},
