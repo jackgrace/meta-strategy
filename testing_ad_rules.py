@@ -1,28 +1,41 @@
 """
-TESTING ad rules (last 7 days incl. today). Runs every 15 minutes.
+Ad-level rules for TESTING / TRYBE and SCALE campaigns, with three strikes.
 
-For each campaign with TESTING or TRYBE in the name, the campaign's 7-day average
-CPC (spend / link clicks) and cost per ATC (spend / ATCs) are the baseline.
-An ACTIVE ad is paused and marked " - OFF" if any of:
-  1. ad 7d spend > $30  & ad CPC > 3x campaign avg CPC       (0 clicks counts)
-  2. ad 7d spend > $60  & 0 ATCs
-  3. ad 7d spend > $125 & (0 purchases
-                           OR (ad cost/ATC > 1.5x campaign avg & ad 7d ROAS < 1.4))
-SCALE campaigns (SCALE as a word in the name, incl. SCALE | CBO): baseline
-is the other ads in the same adset over the same 7 days (the ad itself is
-left out, so a dominant ad isn't measured against its own numbers). An ACTIVE ad is paused + OFF if:
-  ad 7d spend > $125 & ROAS < 1.2
-  & (cost/ATC > 1.3x adset avg cost/ATC                   (0 ATCs counts)
-     OR ATC-to-purchase rate < 0.7x adset avg (purchases / ATCs))
-Skips ads / adsets with OFF or RUN in the name. Testing ads are never
-restarted at midnight, so a retired ad stays off until OFF is removed.
+No rule marks an ad OFF on the first day. Every 15 minutes a failing ad is
+paused for the rest of the day (and restarted if it stops failing). At
+12:05am AEST, before the midnight restart, an ad that failed on each of the
+last 3 days is marked " - OFF"; ads that failed yesterday but haven't hit 3
+strikes are switched back on (incl. TESTING/TRYBE ads, which the midnight
+restart otherwise leaves paused).
+
+A day only counts if the ad spent at least $30 that day, so a restarted ad
+must earn fresh data before it can be judged again.
+
+Strikes are recomputed from Meta's daily numbers on each run, so nothing is
+lost when the server redeploys.
+
+TESTING / TRYBE (last 7 days ending that day, vs the campaign's average):
+  1. spend > $30  & CPC > 3x campaign avg CPC              (0 clicks counts)
+  2. spend > $60  & 0 ATCs
+  3. spend > $125 & (0 purchases
+                     OR (cost/ATC > 1.5x campaign avg & ROAS < 1.4))
+
+SCALE (SCALE as a word in the name, incl. SCALE | CBO; last 7 days ending
+that day, vs the OTHER ads in the same adset):
+  spend > $125 & ROAS < 1.2
+  & (cost/ATC > 1.3x others' avg (0 ATCs counts)
+     OR ATC-to-purchase rate < 0.7x others' avg)
+
+SCALE budget hog (that day only):
+  ad spend > $150 & >= 40% of adset spend & ad ROAS < 1.2 & adset ROAS < 1.4
+
+Skips ads / adsets with OFF or RUN in the name.
 """
 
 import logging
 import time
-from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import requests
 
@@ -36,14 +49,15 @@ logger = logging.getLogger(__name__)
 AEST = timezone(timedelta(hours=10))
 
 TESTING_AD_RULES_ENABLED = True
-CAMPAIGN_KEYWORDS = ("TESTING", "TRYBE")
-
 SCALE_AD_RULE_ENABLED = True
-SCALE_SPEND = 125.0
-SCALE_ROAS = 1.2
-SCALE_CPA_MULT = 1.3
-SCALE_ATC_TO_P_MULT = 0.7   # ATC-to-purchase rate 30% below adset avg
+HOG_ENABLED = True
+STRIKES_ENABLED = True
+
+CAMPAIGN_KEYWORDS = ("TESTING", "TRYBE")
 LOOKBACK_DAYS = 7
+STRIKES_TO_RETIRE = 3
+FRESH_SPEND = 30.0          # min spend on a day for it to count / be judged
+
 CPC_SPEND = 30.0
 CPC_MULT = 3.0
 NO_ATC_SPEND = 60.0
@@ -51,8 +65,15 @@ ATC_SPEND = 125.0
 ATC_MULT = 1.5
 ATC_ROAS = 1.4
 
-# ad_id -> date a rename failure was last posted to Slack (in-memory).
-_rename_failure_reported: dict[str, object] = {}
+SCALE_SPEND = 125.0
+SCALE_ROAS = 1.2
+SCALE_CPA_MULT = 1.3
+SCALE_ATC_TO_P_MULT = 0.7
+
+HOG_SPEND = 150.0
+HOG_SHARE = 0.4
+HOG_AD_ROAS = 1.2
+HOG_ADSET_ROAS = 1.4
 
 
 @dataclass
@@ -63,7 +84,7 @@ class TestingAdAction:
     campaign_name: str
     spend_7d: float
     roas_7d: float
-    action: str  # "would_retire" | "retired" | "paused (rename failed)" | "failed"
+    action: str  # would_pause | paused | would_activate | activated | would_retire | retired | paused (rename failed) | failed
     reason: str
 
 
@@ -72,32 +93,27 @@ def _matches(campaign_name: str) -> bool:
     return any(k in name for k in CAMPAIGN_KEYWORDS)
 
 
-def _fetch_ads(config: Config, keywords, matcher) -> dict[str, dict]:
-    ads: dict[str, dict] = {}
-    # Query each keyword in upper and title case in case Meta's CONTAIN
-    # filter is case-sensitive; results are merged by ad_id.
-    for keyword in sorted({v for k in keywords for v in (k, k.title())}):
-        ads.update(_fetch_ads_for_keyword(config, keyword, matcher))
-    logger.info(f"7d ad rules: fetched {len(ads)} ads ({'/'.join(keywords)})")
-    return ads
+def _today() -> date:
+    return datetime.now(AEST).date()
 
 
-def _fetch_ads_for_keyword(config: Config, keyword: str, matcher) -> dict[str, dict]:
-    today = datetime.now(AEST).date()
-    since = today - timedelta(days=LOOKBACK_DAYS - 1)
+# ---------------------------------------------------------------- fetching
+
+def _fetch_daily(config: Config, keyword: str, matcher, group: str, since: date, until: date) -> list[dict]:
     url = f"{API_BASE}/{config.meta_ad_account_id}/insights"
     params = {
         "access_token": config.meta_access_token,
         "level": "ad",
         "fields": "ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,spend,actions,action_values",
-        "time_range": f'{{"since":"{since}","until":"{today}"}}',
-        "limit": 200,
+        "time_range": f'{{"since":"{since}","until":"{until}"}}',
+        "time_increment": 1,
+        "limit": 500,
         "filtering": (
             '[{"field":"impressions","operator":"GREATER_THAN","value":"0"},'
             '{"field":"campaign.name","operator":"CONTAIN","value":"' + keyword + '"}]'
         ),
     }
-    ads: dict[str, dict] = {}
+    rows: list[dict] = []
     first = True
     while url:
         resp = None
@@ -113,7 +129,7 @@ def _fetch_ads_for_keyword(config: Config, keyword: str, matcher) -> dict[str, d
                         pass
                 if (resp.status_code in (403, 500, 502, 503, 504) or transient_400) and attempt < 4:
                     wait = [30, 60, 120, 240][attempt]
-                    logger.warning(f"Testing ad rules fetch {resp.status_code}, retrying in {wait}s: {resp.text[:200]}")
+                    logger.warning(f"Ad rules fetch {resp.status_code}, retrying in {wait}s: {resp.text[:200]}")
                     time.sleep(wait)
                     continue
                 break
@@ -129,180 +145,293 @@ def _fetch_ads_for_keyword(config: Config, keyword: str, matcher) -> dict[str, d
         for row in data.get("data", []):
             if not matcher(row.get("campaign_name", "")):
                 continue
-            spend = float(row.get("spend", 0))
             revenue = 0.0
             atcs = clicks = purchases = 0
             for av in row.get("action_values", []) or []:
                 if av.get("action_type") == "purchase":
                     revenue = float(av.get("value", 0))
             for a in row.get("actions", []) or []:
-                if a.get("action_type") == "add_to_cart":
+                t = a.get("action_type")
+                if t == "add_to_cart":
                     atcs = int(float(a.get("value", 0)))
-                elif a.get("action_type") == "link_click":
+                elif t == "link_click":
                     clicks = int(float(a.get("value", 0)))
-                elif a.get("action_type") == "purchase":
+                elif t == "purchase":
                     purchases = int(float(a.get("value", 0)))
-            ads[row["ad_id"]] = {
+            rows.append({
+                "date": date.fromisoformat(row["date_start"]),
+                "ad_id": row["ad_id"],
                 "ad_name": row.get("ad_name", "Unknown"),
                 "adset_id": row.get("adset_id", ""),
                 "adset_name": row.get("adset_name", "Unknown"),
                 "campaign_id": row.get("campaign_id", ""),
                 "campaign_name": row.get("campaign_name", "Unknown"),
-                "spend": spend,
+                "group": group,
+                "spend": float(row.get("spend", 0)),
                 "revenue": revenue,
                 "atcs": atcs,
                 "clicks": clicks,
                 "purchases": purchases,
-            }
+            })
         url = data.get("paging", {}).get("next")
         first = False
-    return ads
+    return rows
 
 
-def _failing_rule(ad: dict, avg_cpc: float, avg_cpa: float) -> str | None:
+def _fetch_rows(config: Config, since: date, until: date) -> list[dict]:
+    """Daily ad rows for TESTING/TRYBE and SCALE campaigns, deduped by (ad, day)."""
+    by_key: dict[tuple, dict] = {}
+    # Each keyword is queried in upper and title case in case Meta's CONTAIN
+    # filter is case-sensitive.
+    if TESTING_AD_RULES_ENABLED:
+        for kw in sorted({v for k in CAMPAIGN_KEYWORDS for v in (k, k.title())}):
+            for r in _fetch_daily(config, kw, _matches, "testing", since, until):
+                by_key[(r["ad_id"], r["date"])] = r
+    if SCALE_AD_RULE_ENABLED or HOG_ENABLED:
+        # Testing/Trybe campaigns keep their own rules even if they also say SCALE.
+        def scale_match(n: str) -> bool:
+            return _is_scale_campaign(n) and not _matches(n)
+        for kw in ("SCALE", "Scale"):
+            for r in _fetch_daily(config, kw, scale_match, "scale", since, until):
+                by_key[(r["ad_id"], r["date"])] = r
+    rows = list(by_key.values())
+    logger.info(f"Ad rules: fetched {len(rows)} daily ad rows {since}..{until}")
+    return rows
+
+
+# -------------------------------------------------------------- evaluation
+
+def _aggregate(rows: list[dict], key: str) -> dict:
+    out: dict = {}
+    for r in rows:
+        t = out.setdefault(r[key], {"spend": 0.0, "revenue": 0.0, "atcs": 0, "clicks": 0, "purchases": 0, "meta": r})
+        for f in ("spend", "revenue", "atcs", "clicks", "purchases"):
+            t[f] += r[f]
+    return out
+
+
+def _testing_reason(ad: dict, avg_cpc: float, avg_cpa: float) -> str | None:
     spend = ad["spend"]
     roas = ad["revenue"] / spend if spend > 0 else 0
     cpc = spend / ad["clicks"] if ad["clicks"] > 0 else float("inf")
     cpa = spend / ad["atcs"] if ad["atcs"] > 0 else float("inf")
     if spend > CPC_SPEND and avg_cpc > 0 and cpc > CPC_MULT * avg_cpc:
         cpc_txt = "0 link clicks" if ad["clicks"] == 0 else f"CPC ${cpc:.2f}"
-        return f"spend ${spend:.2f}>${CPC_SPEND:.0f} & {cpc_txt} > {CPC_MULT:g}x campaign avg ${avg_cpc:.2f}"
+        return f"7d spend ${spend:.2f}>${CPC_SPEND:.0f} & {cpc_txt} > {CPC_MULT:g}x campaign avg ${avg_cpc:.2f}"
     if spend > NO_ATC_SPEND and ad["atcs"] == 0:
-        return f"spend ${spend:.2f}>${NO_ATC_SPEND:.0f} & 0 ATCs"
+        return f"7d spend ${spend:.2f}>${NO_ATC_SPEND:.0f} & 0 ATCs"
     if spend > ATC_SPEND and ad["purchases"] == 0:
-        return f"spend ${spend:.2f}>${ATC_SPEND:.0f} & 0 purchases"
+        return f"7d spend ${spend:.2f}>${ATC_SPEND:.0f} & 0 purchases"
     if spend > ATC_SPEND and avg_cpa > 0 and cpa > ATC_MULT * avg_cpa and roas < ATC_ROAS:
-        return (f"spend ${spend:.2f}>${ATC_SPEND:.0f} & cost/ATC ${cpa:.2f} > {ATC_MULT:g}x campaign avg "
+        return (f"7d spend ${spend:.2f}>${ATC_SPEND:.0f} & cost/ATC ${cpa:.2f} > {ATC_MULT:g}x campaign avg "
                 f"${avg_cpa:.2f} & ROAS {roas:.2f}<{ATC_ROAS}")
     return None
 
 
-def _scale_failing_rule(ad: dict, adset_cpa: float, adset_atc_to_p: float) -> str | None:
+def _scale_reason(ad: dict, peer_cpa: float, peer_atc_to_p: float) -> str | None:
     spend = ad["spend"]
     roas = ad["revenue"] / spend if spend > 0 else 0
-    cpa = spend / ad["atcs"] if ad["atcs"] > 0 else float("inf")
-    atc_to_p = ad["purchases"] / ad["atcs"] if ad["atcs"] > 0 else 0.0
     if not (spend > SCALE_SPEND and roas < SCALE_ROAS):
         return None
-    base = f"spend ${spend:.2f}>${SCALE_SPEND:.0f} & ROAS {roas:.2f}<{SCALE_ROAS}"
-    if adset_cpa > 0 and cpa > SCALE_CPA_MULT * adset_cpa:
+    cpa = spend / ad["atcs"] if ad["atcs"] > 0 else float("inf")
+    atc_to_p = ad["purchases"] / ad["atcs"] if ad["atcs"] > 0 else 0.0
+    base = f"7d spend ${spend:.2f}>${SCALE_SPEND:.0f} & ROAS {roas:.2f}<{SCALE_ROAS}"
+    if peer_cpa > 0 and cpa > SCALE_CPA_MULT * peer_cpa:
         cpa_txt = "0 ATCs" if ad["atcs"] == 0 else f"cost/ATC ${cpa:.2f}"
-        return f"{base} & {cpa_txt} > {SCALE_CPA_MULT:g}x other ads' avg ${adset_cpa:.2f}"
-    if adset_atc_to_p > 0 and atc_to_p < SCALE_ATC_TO_P_MULT * adset_atc_to_p:
-        return (f"{base} & ATC→purchase {atc_to_p:.0%} < {SCALE_ATC_TO_P_MULT:g}x other ads' avg "
-                f"{adset_atc_to_p:.0%}")
+        return f"{base} & {cpa_txt} > {SCALE_CPA_MULT:g}x other ads' avg ${peer_cpa:.2f}"
+    if peer_atc_to_p > 0 and atc_to_p < SCALE_ATC_TO_P_MULT * peer_atc_to_p:
+        return f"{base} & ATC→purchase {atc_to_p:.0%} < {SCALE_ATC_TO_P_MULT:g}x other ads' avg {peer_atc_to_p:.0%}"
     return None
 
 
-def _group_totals(ads: dict[str, dict], key: str) -> dict:
-    totals = defaultdict(lambda: {"spend": 0.0, "clicks": 0, "atcs": 0, "purchases": 0})
-    for a in ads.values():
-        t = totals[a[key]]
-        t["spend"] += a["spend"]
-        t["clicks"] += a["clicks"]
-        t["atcs"] += a["atcs"]
-        t["purchases"] += a["purchases"]
-    return totals
+def evaluate(rows: list[dict], as_of: date) -> dict[str, str]:
+    """ad_id -> reason for every ad failing a rule on `as_of`."""
+    window = [r for r in rows if as_of - timedelta(days=LOOKBACK_DAYS - 1) <= r["date"] <= as_of]
+    day = [r for r in rows if r["date"] == as_of]
+    ads7 = _aggregate(window, "ad_id")
+    ads_day = _aggregate(day, "ad_id")
+    fresh = {ad_id for ad_id, t in ads_day.items() if t["spend"] >= FRESH_SPEND}
+    reasons: dict[str, str] = {}
+
+    if TESTING_AD_RULES_ENABLED:
+        camp = _aggregate([r for r in window if r["group"] == "testing"], "campaign_id")
+        for ad_id, t in ads7.items():
+            if t["meta"]["group"] != "testing" or ad_id not in fresh:
+                continue
+            c = camp[t["meta"]["campaign_id"]]
+            avg_cpc = c["spend"] / c["clicks"] if c["clicks"] else 0
+            avg_cpa = c["spend"] / c["atcs"] if c["atcs"] else 0
+            why = _testing_reason(t, avg_cpc, avg_cpa)
+            if why:
+                reasons[ad_id] = why
+
+    if SCALE_AD_RULE_ENABLED:
+        adsets = _aggregate([r for r in window if r["group"] == "scale"], "adset_id")
+        for ad_id, t in ads7.items():
+            if t["meta"]["group"] != "scale" or ad_id not in fresh:
+                continue
+            s = adsets[t["meta"]["adset_id"]]
+            peer_atcs = s["atcs"] - t["atcs"]
+            peer_cpa = (s["spend"] - t["spend"]) / peer_atcs if peer_atcs > 0 else 0
+            peer_atc_to_p = (s["purchases"] - t["purchases"]) / peer_atcs if peer_atcs > 0 else 0
+            why = _scale_reason(t, peer_cpa, peer_atc_to_p)
+            if why:
+                reasons[ad_id] = why
+
+    if HOG_ENABLED:
+        adsets_day = _aggregate([r for r in day if r["group"] == "scale"], "adset_id")
+        for ad_id, t in ads_day.items():
+            if t["meta"]["group"] != "scale" or ad_id in reasons:
+                continue
+            s = adsets_day[t["meta"]["adset_id"]]
+            spend = t["spend"]
+            roas = t["revenue"] / spend if spend else 0
+            share = spend / s["spend"] if s["spend"] else 0
+            as_roas = s["revenue"] / s["spend"] if s["spend"] else 0
+            if spend > HOG_SPEND and share >= HOG_SHARE and roas < HOG_AD_ROAS and as_roas < HOG_ADSET_ROAS:
+                reasons[ad_id] = (f"budget hog: day spend ${spend:.2f} = {share:.0%} of adset, "
+                                  f"ad ROAS {roas:.2f}<{HOG_AD_ROAS}, adset ROAS {as_roas:.2f}<{HOG_ADSET_ROAS}")
+    return reasons
+
+
+# ------------------------------------------------------------------ actions
+
+def _names(info: dict, meta: dict) -> tuple[str, str, bool]:
+    name = info.get("name", meta["ad_name"])
+    adset_name = info.get("adset_name", meta["adset_name"])
+    ok = not any(m in name.upper() for m in ("OFF", "RUN")) and not any(m in adset_name.upper() for m in ("OFF", "RUN"))
+    return name, adset_name, ok
+
+
+def _action(ad_id: str, totals: dict, name: str, adset_name: str, action: str, reason: str) -> TestingAdAction:
+    spend = totals["spend"]
+    return TestingAdAction(
+        ad_id=ad_id, ad_name=name, adset_name=adset_name, campaign_name=totals["meta"]["campaign_name"],
+        spend_7d=spend, roas_7d=(totals["revenue"] / spend if spend else 0),
+        action=action, reason=reason,
+    )
+
+
+def _set_status(config: Config, ad_id: str, totals: dict, name: str, adset_name: str,
+                status: str, verb: str, why: str, dry_run: bool) -> TestingAdAction:
+    if dry_run:
+        return _action(ad_id, totals, name, adset_name, f"would_{verb}", why)
+    ok, err = _update_ad_status(config, ad_id, status)
+    done = "paused" if verb == "pause" else "activated"
+    return _action(ad_id, totals, name, adset_name, done if ok else "failed", why if ok else f"{why} — {verb} failed: {err}")
 
 
 def run_testing_ad_rules(config: Config, dry_run: bool = False) -> list[TestingAdAction]:
-    ads: dict[str, dict] = {}
-    candidates: dict[str, str] = {}
-
-    if TESTING_AD_RULES_ENABLED:
-        testing_ads = _fetch_ads(config, CAMPAIGN_KEYWORDS, _matches)
-        ads.update(testing_ads)
-        camp = _group_totals(testing_ads, "campaign_id")
-        for ad_id, a in testing_ads.items():
-            c = camp[a["campaign_id"]]
-            avg_cpc = c["spend"] / c["clicks"] if c["clicks"] else 0
-            avg_cpa = c["spend"] / c["atcs"] if c["atcs"] else 0
-            why = _failing_rule(a, avg_cpc, avg_cpa)
-            if why:
-                candidates[ad_id] = why
-
-    if SCALE_AD_RULE_ENABLED:
-        # Testing/Trybe campaigns keep their own rules even if they also say SCALE.
-        scale_ads = _fetch_ads(config, ("SCALE",), lambda n: _is_scale_campaign(n) and not _matches(n))
-        ads.update(scale_ads)
-        adsets = _group_totals(scale_ads, "adset_id")
-        for ad_id, a in scale_ads.items():
-            # Baseline = the OTHER ads in the adset, so a dominant ad isn't
-            # compared with an average made mostly of its own numbers.
-            t = adsets[a["adset_id"]]
-            peer_spend = t["spend"] - a["spend"]
-            peer_atcs = t["atcs"] - a["atcs"]
-            peer_purchases = t["purchases"] - a["purchases"]
-            adset_cpa = peer_spend / peer_atcs if peer_atcs > 0 else 0
-            adset_atc_to_p = peer_purchases / peer_atcs if peer_atcs > 0 else 0
-            why = _scale_failing_rule(a, adset_cpa, adset_atc_to_p)
-            if why:
-                candidates[ad_id] = why
-
-    if not candidates:
+    """Every 15 min: pause failing ads for the day; restart ads that recovered."""
+    if not (TESTING_AD_RULES_ENABLED or SCALE_AD_RULE_ENABLED or HOG_ENABLED):
+        return []
+    today = _today()
+    rows = _fetch_rows(config, today - timedelta(days=LOOKBACK_DAYS - 1), today)
+    flagged = evaluate(rows, today)
+    ads7 = _aggregate(rows, "ad_id")
+    today_ads = _aggregate([r for r in rows if r["date"] == today], "ad_id")
+    recover = {a for a, t in today_ads.items() if t["spend"] >= FRESH_SPEND and a not in flagged}
+    if not (flagged or recover):
         return []
 
-    info = fetch_ad_statuses(config, ad_ids=set(candidates))
+    info = fetch_ad_statuses(config, ad_ids=set(flagged) | recover)
     actions: list[TestingAdAction] = []
-    for ad_id, why in sorted(candidates.items(), key=lambda x: -ads[x[0]]["spend"]):
-        a = ads[ad_id]
-        ad_info = info.get(ad_id, {})
-        name = ad_info.get("name", a["ad_name"])
-        adset_name = ad_info.get("adset_name", a["adset_name"])
-        if ad_info.get("status") != "ACTIVE":
+    for ad_id in sorted(set(flagged) | recover, key=lambda a: -ads7[a]["spend"]):
+        t = ads7[ad_id]
+        status = info.get(ad_id, {}).get("status")
+        name, adset_name, ok = _names(info.get(ad_id, {}), t["meta"])
+        if not ok:
             continue
-        if any(m in name.upper() for m in ("OFF", "RUN")) or any(m in adset_name.upper() for m in ("OFF", "RUN")):
-            continue
-
-        act = TestingAdAction(
-            ad_id=ad_id, ad_name=name, adset_name=adset_name, campaign_name=a["campaign_name"],
-            spend_7d=a["spend"], roas_7d=a["revenue"] / a["spend"] if a["spend"] else 0,
-            action="would_retire", reason=why,
-        )
-        if not dry_run:
-            ok, err = _update_ad_status(config, ad_id, "PAUSED")
-            if not ok:
-                act.action, act.reason = "failed", f"{why} — pause failed: {err}"
-            else:
-                renamed, rerr = _rename(config, ad_id, f"{name} - OFF")
-                if renamed:
-                    act.action = "retired"
-                    logger.info(f"Testing ad rules: retired {ad_id} ({name}) — {why}")
-                else:
-                    act.action, act.reason = "paused (rename failed)", f"{why} — rename failed: {rerr}"
-                    today = datetime.now(AEST).date()
-                    if _rename_failure_reported.get(ad_id) == today:
-                        continue
-                    _rename_failure_reported[ad_id] = today
-        actions.append(act)
+        if ad_id in flagged and status == "ACTIVE":
+            actions.append(_set_status(config, ad_id, t, name, adset_name, "PAUSED", "pause",
+                                       flagged[ad_id] + " — paused for today (strike)", dry_run))
+        elif ad_id in recover and status == "PAUSED":
+            actions.append(_set_status(config, ad_id, t, name, adset_name, "ACTIVE", "activate",
+                                       "no ad rule applies any more today", dry_run))
     return actions
 
 
-def send_testing_ad_rules_report(actions: list[TestingAdAction], dry_run: bool, config: Config) -> bool:
+def run_ad_strikes(config: Config, dry_run: bool = False) -> list[TestingAdAction]:
+    """12:05am: OFF ads that failed 3 days running; restart yesterday's other strikes."""
+    if not STRIKES_ENABLED:
+        return []
+    today = _today()
+    days = [today - timedelta(days=k) for k in range(1, STRIKES_TO_RETIRE + 1)]
+    rows = _fetch_rows(config, days[-1] - timedelta(days=LOOKBACK_DAYS - 1), days[0])
+    flagged_by_day = [evaluate(rows, d) for d in days]
+    struck = set.intersection(*(set(f) for f in flagged_by_day))
+    restart = set(flagged_by_day[0]) - struck
+    if not (struck or restart):
+        return []
+
+    window_start = days[0] - timedelta(days=LOOKBACK_DAYS - 1)
+    ads7 = _aggregate([r for r in rows if r["date"] >= window_start], "ad_id")
+    info = fetch_ad_statuses(config, ad_ids=struck | restart)
+    actions: list[TestingAdAction] = []
+    for ad_id in sorted(struck | restart, key=lambda a: -ads7[a]["spend"]):
+        t = ads7[ad_id]
+        status = info.get(ad_id, {}).get("status")
+        name, adset_name, ok = _names(info.get(ad_id, {}), t["meta"])
+        if not ok or status in ("DELETED", "ARCHIVED", None):
+            continue
+        if ad_id in struck:
+            why = f"failed {STRIKES_TO_RETIRE} days running — latest: {flagged_by_day[0][ad_id]}"
+            if dry_run:
+                actions.append(_action(ad_id, t, name, adset_name, "would_retire", why))
+                continue
+            if status == "ACTIVE":
+                paused, err = _update_ad_status(config, ad_id, "PAUSED")
+                if not paused:
+                    actions.append(_action(ad_id, t, name, adset_name, "failed", f"{why} — pause failed: {err}"))
+                    continue
+            renamed, rerr = _rename(config, ad_id, f"{name} - OFF")
+            if renamed:
+                actions.append(_action(ad_id, t, name, adset_name, "retired", why))
+            else:
+                actions.append(_action(ad_id, t, name, adset_name, "paused (rename failed)",
+                                       f"{why} — OFF rename failed: {rerr}"))
+        elif status == "PAUSED":
+            strikes = 1 + sum(1 for f in flagged_by_day[1:] if ad_id in f)
+            actions.append(_set_status(config, ad_id, t, name, adset_name, "ACTIVE", "activate",
+                                       f"strike {strikes}/{STRIKES_TO_RETIRE} yesterday — back on for a fresh day", dry_run))
+    return actions
+
+
+# ------------------------------------------------------------------ report
+
+def send_testing_ad_rules_report(actions: list[TestingAdAction], dry_run: bool, config: Config, title: str = "Ad rules") -> bool:
     if not actions:
         return True
     mode = "DRY RUN" if dry_run else "LIVE"
-    lines = [
-        f"• *{a.ad_name}* — `{a.campaign_name}` / `{a.adset_name}`\n"
-        f"   7d: ${a.spend_7d:,.2f} @ {a.roas_7d:.2f}x │ _{a.reason}_"
-        + ("" if a.action in ("retired", "would_retire") else f" *({a.action})*")
-        for a in actions[:20]
-    ]
+    groups = (
+        ("🪦 Marked OFF (3 strikes)", ("retired", "would_retire")),
+        ("⏸️ Paused for today (strike)", ("paused", "would_pause")),
+        ("▶️ Back on", ("activated", "would_activate")),
+        ("⚠️ Needs attention", ("paused (rename failed)", "failed")),
+    )
     blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"🧪 Ads retired (7-day rules) — {len(actions)}"}},
+        {"type": "header", "text": {"type": "plain_text", "text": f"🧪 {title} — {len(actions)}"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": (
-            f"*[{mode}]* Last {LOOKBACK_DAYS} days incl. today. *TESTING / TRYBE* (vs campaign avg): spend>${CPC_SPEND:.0f} & CPC>{CPC_MULT:g}x avg │ "
-            f"spend>${NO_ATC_SPEND:.0f} & 0 ATCs │ spend>${ATC_SPEND:.0f} & (0 purchases OR (cost/ATC>{ATC_MULT:g}x avg & ROAS<{ATC_ROAS})) "
-            f"→ pause + mark OFF.\n*SCALE* (vs other ads in the adset): spend>${SCALE_SPEND:.0f} & ROAS<{SCALE_ROAS} & (cost/ATC>{SCALE_CPA_MULT:g}x avg "
-            f"OR ATC→purchase<{SCALE_ATC_TO_P_MULT:g}x avg) → pause + mark OFF. Remove OFF from the name to bring one back."
+            f"*[{mode}]* TESTING/TRYBE + SCALE ad rules. Failing ads are paused for the day; "
+            f"{STRIKES_TO_RETIRE} days failing in a row (≥${FRESH_SPEND:.0f} spend each day) → marked OFF. "
+            f"Remove OFF from the name to bring one back."
         )}]},
-        {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}},
     ]
+    for heading, kinds in groups:
+        group = [a for a in actions if a.action in kinds]
+        if not group:
+            continue
+        lines = [
+            f"• *{a.ad_name}* — `{a.campaign_name}` / `{a.adset_name}`\n"
+            f"   7d: ${a.spend_7d:,.2f} @ {a.roas_7d:.2f}x │ _{a.reason}_"
+            for a in group[:15]
+        ]
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*{heading}*\n" + "\n".join(lines)}})
     try:
         resp = requests.post(config.slack_webhook_url, json={"blocks": blocks}, timeout=10)
         if not resp.ok:
-            logger.error(f"Slack rejected testing ad rules report: {resp.status_code} — {resp.text[:300]}")
+            logger.error(f"Slack rejected ad rules report: {resp.status_code} — {resp.text[:300]}")
         return resp.ok
     except requests.RequestException as e:
-        logger.error(f"Failed to send testing ad rules report: {e}")
+        logger.error(f"Failed to send ad rules report: {e}")
         return False

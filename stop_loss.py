@@ -199,7 +199,7 @@ SCALE_CBO_AD_SPEND_HOG_ADSET_ROAS = 1.5
 #   ad spend > $150 & ad share of adset spend >= 40%
 #   & ad ROAS < 1.2 & adset ROAS < 1.4 -> pause
 #   never pauses the last active ad in an adset; skips OFF/RUN names
-SCALE_AD_HOG_ENABLED = True
+SCALE_AD_HOG_ENABLED = False  # moved to testing_ad_rules.py (with strikes)
 SCALE_AD_HOG_MIN_SPEND = 150.0
 SCALE_AD_HOG_SHARE = 0.4
 SCALE_AD_HOG_AD_ROAS = 1.2

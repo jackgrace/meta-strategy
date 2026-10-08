@@ -32,6 +32,7 @@ from main import (
     run_surf_reset,
     run_scale_retire,
     run_testing_ad_rules,
+    run_ad_strikes,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._run_scale_retire_endpoint(source="http")
         elif self.path == "/testing-ad-rules":
             self._run_testing_ad_rules_endpoint(source="http")
+        elif self.path == "/ad-strikes":
+            self._run_ad_strikes_endpoint(source="http")
         else:
             self._respond(404, {"error": "not found"})
 
@@ -177,6 +180,15 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(200, result)
         except Exception as e:
             logger.error(f"Ad kill 3d failed: {e}")
+            self._respond(500, {"status": "error", "message": str(e)})
+
+    def _run_ad_strikes_endpoint(self, source: str):
+        logger.info(f"Manual trigger via {source} — ad strikes")
+        try:
+            result = run_ad_strikes()
+            self._respond(200, result)
+        except Exception as e:
+            logger.error(f"Ad strikes failed: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
 
     def _run_testing_ad_rules_endpoint(self, source: str):
@@ -536,6 +548,14 @@ def _run_midnight_restart_scheduler():
         except Exception as e:
             logger.error(f"Testing retire failed: {e}")
             _send_stop_loss_failure(f"testing-retire: {type(e).__name__}: {e}")
+
+        # Strikes before the restart, so struck-out ads are marked OFF first.
+        try:
+            logger.info("Scheduler: running 12:05am AEST ad strikes")
+            run_ad_strikes()
+        except Exception as e:
+            logger.error(f"Ad strikes failed: {e}")
+            _send_stop_loss_failure(f"ad-strikes: {type(e).__name__}: {e}")
 
         try:
             logger.info("Scheduler: running 12:05am AEST surf reset")

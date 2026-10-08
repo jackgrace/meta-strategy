@@ -38,7 +38,11 @@ from testing_retire import (
 )
 from testing_surf import run_surf_reset as _run_surf_reset, send_surf_reset_report
 from scale_retire import run_scale_retire as _run_scale_retire, send_scale_retire_report
-from testing_ad_rules import run_testing_ad_rules as _run_testing_ad_rules, send_testing_ad_rules_report
+from testing_ad_rules import (
+    run_testing_ad_rules as _run_testing_ad_rules,
+    run_ad_strikes as _run_ad_strikes,
+    send_testing_ad_rules_report,
+)
 from slack_reporter import send_testing_missed_opps, send_early_fatigue_report
 
 logging.basicConfig(
@@ -224,21 +228,39 @@ def run_surf_reset() -> dict:
     return {"status": "ok", "mode": mode, "per_account": per_account}
 
 
+def _ad_rules_summary(actions) -> dict:
+    count = lambda *kinds: sum(1 for a in actions if a.action in kinds)
+    return {
+        "paused": count("paused", "would_pause"),
+        "activated": count("activated", "would_activate"),
+        "retired": count("retired", "would_retire", "paused (rename failed)"),
+        "failed": count("failed"),
+    }
+
+
 def run_testing_ad_rules() -> dict:
-    """Every 15 min: 7d ad rules — TESTING/TRYBE vs campaign avg, SCALE vs adset avg (pause + mark OFF)."""
+    """Every 15 min: TESTING/TRYBE + SCALE ad rules — pause for the day / restart on recovery."""
     dry_run = _dry_run()
     mode = "DRY RUN" if dry_run else "LIVE"
     per_account = []
     for config in _per_account_configs():
-        logger.info(f"--- Testing ad rules: account {config.meta_ad_account_id} ---")
+        logger.info(f"--- Ad rules: account {config.meta_ad_account_id} ---")
         actions = _run_testing_ad_rules(config, dry_run=dry_run)
-        send_testing_ad_rules_report(actions, dry_run, config)
-        per_account.append({
-            "account": config.meta_ad_account_id,
-            "retired": sum(1 for a in actions if a.action in ("retired", "paused (rename failed)")),
-            "would_retire": sum(1 for a in actions if a.action == "would_retire"),
-            "failed": sum(1 for a in actions if a.action == "failed"),
-        })
+        send_testing_ad_rules_report(actions, dry_run, config, title="Ad rules")
+        per_account.append({"account": config.meta_ad_account_id, **_ad_rules_summary(actions)})
+    return {"status": "ok", "mode": mode, "per_account": per_account}
+
+
+def run_ad_strikes() -> dict:
+    """12:05am: mark OFF ads failing 3 days running; restart yesterday's other strikes."""
+    dry_run = _dry_run()
+    mode = "DRY RUN" if dry_run else "LIVE"
+    per_account = []
+    for config in _per_account_configs():
+        logger.info(f"--- Ad strikes: account {config.meta_ad_account_id} ---")
+        actions = _run_ad_strikes(config, dry_run=dry_run)
+        send_testing_ad_rules_report(actions, dry_run, config, title="Ad strikes (midnight)")
+        per_account.append({"account": config.meta_ad_account_id, **_ad_rules_summary(actions)})
     return {"status": "ok", "mode": mode, "per_account": per_account}
 
 
