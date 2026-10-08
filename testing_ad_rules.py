@@ -9,7 +9,8 @@ An ACTIVE ad is paused and marked " - OFF" if any of:
   3. ad 7d spend > $125 & (0 purchases
                            OR (ad cost/ATC > 1.5x campaign avg & ad 7d ROAS < 1.4))
 SCALE campaigns (SCALE as a word in the name, incl. SCALE | CBO): baseline
-is the ad's own adset over the same 7 days. An ACTIVE ad is paused + OFF if:
+is the other ads in the same adset over the same 7 days (the ad itself is
+left out, so a dominant ad isn't measured against its own numbers). An ACTIVE ad is paused + OFF if:
   ad 7d spend > $125 & ROAS < 1.2
   & (cost/ATC > 1.3x adset avg cost/ATC                   (0 ATCs counts)
      OR ATC-to-purchase rate < 0.7x adset avg (purchases / ATCs))
@@ -186,9 +187,9 @@ def _scale_failing_rule(ad: dict, adset_cpa: float, adset_atc_to_p: float) -> st
     base = f"spend ${spend:.2f}>${SCALE_SPEND:.0f} & ROAS {roas:.2f}<{SCALE_ROAS}"
     if adset_cpa > 0 and cpa > SCALE_CPA_MULT * adset_cpa:
         cpa_txt = "0 ATCs" if ad["atcs"] == 0 else f"cost/ATC ${cpa:.2f}"
-        return f"{base} & {cpa_txt} > {SCALE_CPA_MULT:g}x adset avg ${adset_cpa:.2f}"
+        return f"{base} & {cpa_txt} > {SCALE_CPA_MULT:g}x other ads' avg ${adset_cpa:.2f}"
     if adset_atc_to_p > 0 and atc_to_p < SCALE_ATC_TO_P_MULT * adset_atc_to_p:
-        return (f"{base} & ATC→purchase {atc_to_p:.0%} < {SCALE_ATC_TO_P_MULT:g}x adset avg "
+        return (f"{base} & ATC→purchase {atc_to_p:.0%} < {SCALE_ATC_TO_P_MULT:g}x other ads' avg "
                 f"{adset_atc_to_p:.0%}")
     return None
 
@@ -226,9 +227,14 @@ def run_testing_ad_rules(config: Config, dry_run: bool = False) -> list[TestingA
         ads.update(scale_ads)
         adsets = _group_totals(scale_ads, "adset_id")
         for ad_id, a in scale_ads.items():
+            # Baseline = the OTHER ads in the adset, so a dominant ad isn't
+            # compared with an average made mostly of its own numbers.
             t = adsets[a["adset_id"]]
-            adset_cpa = t["spend"] / t["atcs"] if t["atcs"] else 0
-            adset_atc_to_p = t["purchases"] / t["atcs"] if t["atcs"] else 0
+            peer_spend = t["spend"] - a["spend"]
+            peer_atcs = t["atcs"] - a["atcs"]
+            peer_purchases = t["purchases"] - a["purchases"]
+            adset_cpa = peer_spend / peer_atcs if peer_atcs > 0 else 0
+            adset_atc_to_p = peer_purchases / peer_atcs if peer_atcs > 0 else 0
             why = _scale_failing_rule(a, adset_cpa, adset_atc_to_p)
             if why:
                 candidates[ad_id] = why
@@ -287,7 +293,7 @@ def send_testing_ad_rules_report(actions: list[TestingAdAction], dry_run: bool, 
         {"type": "context", "elements": [{"type": "mrkdwn", "text": (
             f"*[{mode}]* Last {LOOKBACK_DAYS} days incl. today. *TESTING / TRYBE* (vs campaign avg): spend>${CPC_SPEND:.0f} & CPC>{CPC_MULT:g}x avg │ "
             f"spend>${NO_ATC_SPEND:.0f} & 0 ATCs │ spend>${ATC_SPEND:.0f} & (0 purchases OR (cost/ATC>{ATC_MULT:g}x avg & ROAS<{ATC_ROAS})) "
-            f"→ pause + mark OFF.\n*SCALE* (vs adset avg): spend>${SCALE_SPEND:.0f} & ROAS<{SCALE_ROAS} & (cost/ATC>{SCALE_CPA_MULT:g}x avg "
+            f"→ pause + mark OFF.\n*SCALE* (vs other ads in the adset): spend>${SCALE_SPEND:.0f} & ROAS<{SCALE_ROAS} & (cost/ATC>{SCALE_CPA_MULT:g}x avg "
             f"OR ATC→purchase<{SCALE_ATC_TO_P_MULT:g}x avg) → pause + mark OFF. Remove OFF from the name to bring one back."
         )}]},
         {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}},
