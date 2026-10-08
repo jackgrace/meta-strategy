@@ -14,7 +14,8 @@ must earn fresh data before it can be judged again.
 Strikes are recomputed from Meta's daily numbers on each run, so nothing is
 lost when the server redeploys.
 
-TESTING / TRYBE (last 7 days ending that day, vs the campaign's average):
+TESTING / TRYBE (last 7 days ending that day, vs the OTHER ads in the
+campaign — the ad itself is left out of the average):
   1. spend > $30  & CPC > 3x campaign avg CPC              (0 clicks counts)
   2. spend > $60  & 0 ATCs
   3. spend > $125 & (0 purchases
@@ -26,7 +27,7 @@ that day, vs the OTHER ads in the same adset):
   & (cost/ATC > 1.3x others' avg (0 ATCs counts)
      OR ATC-to-purchase rate < 0.7x others' avg)
 
-SCALE budget hog (that day only):
+Budget hog, SCALE + TESTING + TRYBE (that day only):
   ad spend > $150 & >= 40% of adset spend & ad ROAS < 1.2 & adset ROAS < 1.4
 
 Skips ads / adsets with OFF or RUN in the name.
@@ -217,13 +218,13 @@ def _testing_reason(ad: dict, avg_cpc: float, avg_cpa: float) -> str | None:
     cpa = spend / ad["atcs"] if ad["atcs"] > 0 else float("inf")
     if spend > CPC_SPEND and avg_cpc > 0 and cpc > CPC_MULT * avg_cpc:
         cpc_txt = "0 link clicks" if ad["clicks"] == 0 else f"CPC ${cpc:.2f}"
-        return f"7d spend ${spend:.2f}>${CPC_SPEND:.0f} & {cpc_txt} > {CPC_MULT:g}x campaign avg ${avg_cpc:.2f}"
+        return f"7d spend ${spend:.2f}>${CPC_SPEND:.0f} & {cpc_txt} > {CPC_MULT:g}x other ads' avg ${avg_cpc:.2f}"
     if spend > NO_ATC_SPEND and ad["atcs"] == 0:
         return f"7d spend ${spend:.2f}>${NO_ATC_SPEND:.0f} & 0 ATCs"
     if spend > ATC_SPEND and ad["purchases"] == 0:
         return f"7d spend ${spend:.2f}>${ATC_SPEND:.0f} & 0 purchases"
     if spend > ATC_SPEND and avg_cpa > 0 and cpa > ATC_MULT * avg_cpa and roas < ATC_ROAS:
-        return (f"7d spend ${spend:.2f}>${ATC_SPEND:.0f} & cost/ATC ${cpa:.2f} > {ATC_MULT:g}x campaign avg "
+        return (f"7d spend ${spend:.2f}>${ATC_SPEND:.0f} & cost/ATC ${cpa:.2f} > {ATC_MULT:g}x other ads' avg "
                 f"${avg_cpa:.2f} & ROAS {roas:.2f}<{ATC_ROAS}")
     return None
 
@@ -263,9 +264,14 @@ def evaluate(rows: list[dict], as_of: date, for_restart: bool = False) -> dict[s
         for ad_id, t in ads7.items():
             if t["meta"]["group"] != "testing" or ad_id not in fresh:
                 continue
+            # Baseline = the OTHER ads in the campaign, so a dominant ad isn't
+            # compared with an average made mostly of its own numbers.
             c = camp[t["meta"]["campaign_id"]]
-            avg_cpc = c["spend"] / c["clicks"] if c["clicks"] else 0
-            avg_cpa = c["spend"] / c["atcs"] if c["atcs"] else 0
+            peer_spend = c["spend"] - t["spend"]
+            peer_clicks = c["clicks"] - t["clicks"]
+            peer_atcs = c["atcs"] - t["atcs"]
+            avg_cpc = peer_spend / peer_clicks if peer_clicks > 0 else 0
+            avg_cpa = peer_spend / peer_atcs if peer_atcs > 0 else 0
             why = _testing_reason(t, avg_cpc, avg_cpa)
             if why:
                 reasons[ad_id] = why
@@ -284,9 +290,9 @@ def evaluate(rows: list[dict], as_of: date, for_restart: bool = False) -> dict[s
                 reasons[ad_id] = why
 
     if HOG_ENABLED:
-        adsets_day = _aggregate([r for r in day if r["group"] == "scale"], "adset_id")
+        adsets_day = _aggregate(day, "adset_id")
         for ad_id, t in ads_day.items():
-            if t["meta"]["group"] != "scale" or ad_id in reasons:
+            if ad_id in reasons:
                 continue
             s = adsets_day[t["meta"]["adset_id"]]
             spend = t["spend"]
