@@ -52,7 +52,7 @@ AEST = timezone(timedelta(hours=10))
 TESTING_AD_RULES_ENABLED = True
 SCALE_AD_RULE_ENABLED = True
 HOG_ENABLED = True
-STRIKES_ENABLED = True
+STRIKES_ENABLED = False
 # Every-15-min pause/restart. Off: ads are judged once a day (midnight
 # strikes) instead of on noisy intra-day numbers.
 INTRADAY_ENABLED = False

@@ -2,7 +2,7 @@
 Intra-day stop-loss. Runs every 15 min.
 
 Rules:
-- SCALE adsets (today's metrics):
+- SCALE adsets (today's metrics; also any campaign or adset with WINNERS in the name):
     stop:    ACTIVE + spend>$1000 & ROAS<0.8
     restart: PAUSED + spend>$1000 & ROAS>=0.8 (intra-day if ROAS improves)
     (skip adsets with OFF in name; midnight is the primary recovery path)
@@ -614,6 +614,11 @@ def _adset_roas_fail(spend: float, roas: float, spend_t: float, roas_t: float) -
     return None
 
 
+def _is_winners(name: str) -> bool:
+    """Match campaign or adset name containing WINNERS (e.g. WINNERS_UK_45)."""
+    return "WINNERS" in name.upper()
+
+
 def _is_cbo_campaign(campaign_name: str) -> bool:
     """Match campaign name containing CBO as a whole word."""
     parts = [p.strip() for p in campaign_name.upper().replace("|", " ").split()]
@@ -665,7 +670,9 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                     "adset_name": ad["adset_name"],
                     "campaign_name": campaign_name,
                 }
-        elif SCALE_ADSET_ENABLED and _is_scale_campaign(campaign_name):
+        elif SCALE_ADSET_ENABLED and (_is_scale_campaign(campaign_name)
+                                      or _is_winners(campaign_name)
+                                      or _is_winners(ad["adset_name"])):
             scale_adset_ids.add(ad["adset_id"])
             adset_meta[ad["adset_id"]] = {
                 "adset_name": ad["adset_name"],
