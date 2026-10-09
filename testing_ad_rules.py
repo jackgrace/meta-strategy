@@ -53,6 +53,9 @@ TESTING_AD_RULES_ENABLED = True
 SCALE_AD_RULE_ENABLED = True
 HOG_ENABLED = True
 STRIKES_ENABLED = True
+# Every-15-min pause/restart. Off: ads are judged once a day (midnight
+# strikes) instead of on noisy intra-day numbers.
+INTRADAY_ENABLED = False
 
 CAMPAIGN_KEYWORDS = ("TESTING", "TRYBE")
 LOOKBACK_DAYS = 7
@@ -335,7 +338,7 @@ def _set_status(config: Config, ad_id: str, totals: dict, name: str, adset_name:
 
 def run_testing_ad_rules(config: Config, dry_run: bool = False) -> list[TestingAdAction]:
     """Every 15 min: pause failing ads for the day; restart ads that recovered."""
-    if not (TESTING_AD_RULES_ENABLED or SCALE_AD_RULE_ENABLED or HOG_ENABLED):
+    if not INTRADAY_ENABLED or not (TESTING_AD_RULES_ENABLED or SCALE_AD_RULE_ENABLED or HOG_ENABLED):
         return []
     today = _today()
     rows = _fetch_rows(config, today - timedelta(days=LOOKBACK_DAYS - 1), today)
@@ -378,7 +381,9 @@ def run_ad_strikes(config: Config, dry_run: bool = False) -> list[TestingAdActio
     rows = _fetch_rows(config, days[-1] - timedelta(days=LOOKBACK_DAYS - 1), days[0])
     flagged_by_day = [evaluate(rows, d) for d in days]
     struck = set.intersection(*(set(f) for f in flagged_by_day))
-    restart = set(flagged_by_day[0]) - struck
+    # Restarting yesterday's strikes only makes sense when the intra-day job
+    # paused them; otherwise a paused ad here was paused by hand.
+    restart = (set(flagged_by_day[0]) - struck) if INTRADAY_ENABLED else set()
     if not (struck or restart):
         return []
 
