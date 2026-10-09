@@ -43,6 +43,7 @@ from testing_ad_rules import (
     run_ad_strikes as _run_ad_strikes,
     send_testing_ad_rules_report,
 )
+from disaster_stop import run_disaster_stop as _run_disaster_stop, run_disaster_midnight as _run_disaster_midnight, send_disaster_report
 from slack_reporter import send_testing_missed_opps, send_early_fatigue_report
 
 logging.basicConfig(
@@ -262,6 +263,32 @@ def run_ad_strikes() -> dict:
         send_testing_ad_rules_report(actions, dry_run, config, title="Ad strikes (midnight)")
         per_account.append({"account": config.meta_ad_account_id, **_ad_rules_summary(actions)})
     return {"status": "ok", "mode": mode, "per_account": per_account}
+
+
+def _run_disaster(fn, title: str) -> dict:
+    dry_run = _dry_run()
+    per_account = []
+    for config in _per_account_configs():
+        logger.info(f"--- {title}: account {config.meta_ad_account_id} ---")
+        actions = fn(config, dry_run=dry_run)
+        send_disaster_report(actions, dry_run, config, title)
+        per_account.append({
+            "account": config.meta_ad_account_id,
+            "paused": sum(1 for a in actions if a.action in ("paused", "would_pause")),
+            "activated": sum(1 for a in actions if a.action in ("activated", "would_activate")),
+            "failed": sum(1 for a in actions if a.action == "failed"),
+        })
+    return {"status": "ok", "mode": "DRY RUN" if dry_run else "LIVE", "per_account": per_account}
+
+
+def run_disaster_stop() -> dict:
+    """Every 15 min: ad-level disaster stop, all campaigns (pause for today)."""
+    return _run_disaster(_run_disaster_stop, "Ad disaster stop")
+
+
+def run_disaster_midnight() -> dict:
+    """12:05am: restart ads the disaster stop paused yesterday."""
+    return _run_disaster(_run_disaster_midnight, "Ad disaster stop — midnight")
 
 
 def run_scale_retire() -> dict:

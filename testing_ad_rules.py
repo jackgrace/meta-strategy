@@ -103,8 +103,12 @@ def _today() -> date:
 
 # ---------------------------------------------------------------- fetching
 
-def _fetch_daily(config: Config, keyword: str, matcher, group: str, since: date, until: date) -> list[dict]:
+def _fetch_daily(config: Config, keyword: str | None, matcher, group: str, since: date, until: date) -> list[dict]:
+    """Daily ad rows. keyword=None fetches every campaign."""
     url = f"{API_BASE}/{config.meta_ad_account_id}/insights"
+    filters = '{"field":"impressions","operator":"GREATER_THAN","value":"0"}'
+    if keyword:
+        filters += ',{"field":"campaign.name","operator":"CONTAIN","value":"' + keyword + '"}'
     params = {
         "access_token": config.meta_access_token,
         "level": "ad",
@@ -112,10 +116,7 @@ def _fetch_daily(config: Config, keyword: str, matcher, group: str, since: date,
         "time_range": f'{{"since":"{since}","until":"{until}"}}',
         "time_increment": 1,
         "limit": 500,
-        "filtering": (
-            '[{"field":"impressions","operator":"GREATER_THAN","value":"0"},'
-            '{"field":"campaign.name","operator":"CONTAIN","value":"' + keyword + '"}]'
-        ),
+        "filtering": "[" + filters + "]",
     }
     rows: list[dict] = []
     first = True
