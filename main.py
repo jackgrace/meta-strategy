@@ -283,12 +283,12 @@ def _run_disaster(fn, title: str) -> dict:
 
 def run_disaster_stop() -> dict:
     """Every 15 min: ad-level disaster stop, all campaigns (pause for today)."""
-    return _run_disaster(_run_disaster_stop, "Ad disaster stop")
+    return _run_disaster(_run_disaster_stop, "Ad Guard")
 
 
 def run_disaster_midnight() -> dict:
     """12:05am: restart ads the disaster stop paused yesterday."""
-    return _run_disaster(_run_disaster_midnight, "Ad disaster stop — midnight")
+    return _run_disaster(_run_disaster_midnight, "Ad Guard — midnight")
 
 
 def run_scale_retire() -> dict:

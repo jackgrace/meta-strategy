@@ -154,12 +154,12 @@ def send_disaster_report(actions: list[DisasterAction], dry_run: bool, config: C
         return True
     mode = "DRY RUN" if dry_run else "LIVE"
     groups = (
-        ("🚨 Paused for today", ("paused", "would_pause")),
+        ("⏸️ Paused for today", ("paused", "would_pause")),
         ("▶️ Back on", ("activated", "would_activate")),
         ("⚠️ Failed", ("failed",)),
     )
     blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"🚨 {title} — {len(actions)}"}},
+        {"type": "header", "text": {"type": "plain_text", "text": f"🛡️ {title} — {len(actions)}"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": (
             f"*[{mode}]* All campaigns. Today: spend>${NO_PURCHASE_SPEND:.0f} & 0 purchases, or "
             f"spend>${ATC_SPEND:.0f} & cost/ATC > {ATC_PEER_MULT:g}x peers' 7d (min ${ATC_FLOOR:.0f}) → paused for today, "
