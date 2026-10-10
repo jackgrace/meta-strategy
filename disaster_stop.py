@@ -8,7 +8,7 @@ An ad at ROAS >= 1.2 today is never paused, whatever its cost per ATC.
 Otherwise, pause an ACTIVE ad for the rest of today if either:
   A. today spend > $120 & 0 purchases today
   B. today spend > $150 & today cost/ATC > max(3x peers' 7-day cost/ATC, $30)
-  C. today spend > $180 & ROAS < 1.0 (whatever purchases or ATCs)
+  C. today spend > $150 & ROAS < 1.0 (whatever purchases or ATCs)
      (0 ATCs today counts; peers = the other ads in the same adset over the
       last 7 days incl. today — the ad itself is left out)
 
@@ -40,7 +40,7 @@ ATC_PEER_MULT = 3.0
 ATC_FLOOR = 30.0               # never trigger below $30 per ATC
 PEER_DAYS = 7
 PROTECT_ROAS = 1.2             # ad ROAS today >= this -> never paused
-LOSS_SPEND = 180.0             # ~3x target cost per purchase
+LOSS_SPEND = 150.0             # ~2.5x target cost per purchase
 LOSS_ROAS = 1.0
 
 
