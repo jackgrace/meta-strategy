@@ -8,6 +8,7 @@ An ad at ROAS >= 1.2 today is never paused, whatever its cost per ATC.
 Otherwise, pause an ACTIVE ad for the rest of today if either:
   A. today spend > $120 & 0 purchases today
   B. today spend > $150 & today cost/ATC > max(3x peers' 7-day cost/ATC, $30)
+  C. today spend > $180 & ROAS < 1.0 (whatever purchases or ATCs)
      (0 ATCs today counts; peers = the other ads in the same adset over the
       last 7 days incl. today — the ad itself is left out)
 
@@ -39,6 +40,8 @@ ATC_PEER_MULT = 3.0
 ATC_FLOOR = 30.0               # never trigger below $30 per ATC
 PEER_DAYS = 7
 PROTECT_ROAS = 1.2             # ad ROAS today >= this -> never paused
+LOSS_SPEND = 180.0             # ~3x target cost per purchase
+LOSS_ROAS = 1.0
 
 
 @dataclass
@@ -72,6 +75,10 @@ def evaluate(rows: list[dict], as_of: date) -> dict[str, str]:
             continue
         if spend > NO_PURCHASE_SPEND and d["purchases"] == 0:
             reasons[ad_id] = f"today ${spend:.2f} > ${NO_PURCHASE_SPEND:.0f} with 0 purchases"
+            continue
+        roas = d["revenue"] / spend if spend else 0
+        if spend > LOSS_SPEND and roas < LOSS_ROAS:
+            reasons[ad_id] = f"today ${spend:.2f} > ${LOSS_SPEND:.0f} with ROAS {roas:.2f} < {LOSS_ROAS:g}"
             continue
         if spend <= ATC_SPEND:
             continue
@@ -162,7 +169,8 @@ def send_disaster_report(actions: list[DisasterAction], dry_run: bool, config: C
         {"type": "header", "text": {"type": "plain_text", "text": f"🛡️ {title} — {len(actions)}"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": (
             f"*[{mode}]* All campaigns. Today: spend>${NO_PURCHASE_SPEND:.0f} & 0 purchases, or "
-            f"spend>${ATC_SPEND:.0f} & cost/ATC > {ATC_PEER_MULT:g}x peers' 7d (min ${ATC_FLOOR:.0f}) → paused for today, "
+            f"spend>${ATC_SPEND:.0f} & cost/ATC > {ATC_PEER_MULT:g}x peers' 7d (min ${ATC_FLOOR:.0f}), or "
+            f"spend>${LOSS_SPEND:.0f} & ROAS<{LOSS_ROAS:g} → paused for today, "
             f"back on at midnight. Ads at ≥{PROTECT_ROAS}x today are never paused. No OFF added."
         )}]},
     ]
