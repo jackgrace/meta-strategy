@@ -44,6 +44,7 @@ from testing_ad_rules import (
     send_testing_ad_rules_report,
 )
 from disaster_stop import run_disaster_stop as _run_disaster_stop, run_disaster_midnight as _run_disaster_midnight, send_disaster_report
+from testing_cleanup import run_testing_cleanup as _run_testing_cleanup, send_testing_cleanup_report
 from slack_reporter import send_testing_missed_opps, send_early_fatigue_report
 
 logging.basicConfig(
@@ -289,6 +290,23 @@ def run_disaster_stop() -> dict:
 def run_disaster_midnight() -> dict:
     """12:05am: restart ads the disaster stop paused yesterday."""
     return _run_disaster(_run_disaster_midnight, "Ad Guard — midnight")
+
+
+def run_testing_cleanup() -> dict:
+    """12:05am: TESTING ads >7 days old — OFF LOW ROAS / OFF LOW SPEND (last 7 days)."""
+    dry_run = _dry_run()
+    per_account = []
+    for config in _per_account_configs():
+        logger.info(f"--- Testing clean-up: account {config.meta_ad_account_id} ---")
+        actions = _run_testing_cleanup(config, dry_run=dry_run)
+        send_testing_cleanup_report(actions, dry_run, config)
+        per_account.append({
+            "account": config.meta_ad_account_id,
+            "low_roas": sum(1 for a in actions if a.label == "LOW ROAS"),
+            "low_spend": sum(1 for a in actions if a.label == "LOW SPEND"),
+            "failed": sum(1 for a in actions if a.action in ("failed", "paused (rename failed)")),
+        })
+    return {"status": "ok", "mode": "DRY RUN" if dry_run else "LIVE", "per_account": per_account}
 
 
 def run_scale_retire() -> dict:

@@ -35,6 +35,7 @@ from main import (
     run_ad_strikes,
     run_disaster_stop,
     run_disaster_midnight,
+    run_testing_cleanup,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._run_ad_strikes_endpoint(source="http")
         elif self.path == "/disaster-stop":
             self._run_disaster_stop_endpoint(source="http")
+        elif self.path == "/testing-cleanup":
+            self._run_testing_cleanup_endpoint(source="http")
         else:
             self._respond(404, {"error": "not found"})
 
@@ -184,6 +187,15 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(200, result)
         except Exception as e:
             logger.error(f"Ad kill 3d failed: {e}")
+            self._respond(500, {"status": "error", "message": str(e)})
+
+    def _run_testing_cleanup_endpoint(self, source: str):
+        logger.info(f"Manual trigger via {source} — testing clean-up")
+        try:
+            result = run_testing_cleanup()
+            self._respond(200, result)
+        except Exception as e:
+            logger.error(f"Testing clean-up failed: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
 
     def _run_disaster_stop_endpoint(self, source: str):
@@ -567,6 +579,14 @@ def _run_midnight_restart_scheduler():
         except Exception as e:
             logger.error(f"Testing retire failed: {e}")
             _send_stop_loss_failure(f"testing-retire: {type(e).__name__}: {e}")
+
+        # Clean-up before the restarts, so retired ads are marked OFF first.
+        try:
+            logger.info("Scheduler: running 12:05am AEST testing clean-up")
+            run_testing_cleanup()
+        except Exception as e:
+            logger.error(f"Testing clean-up failed: {e}")
+            _send_stop_loss_failure(f"testing-cleanup: {type(e).__name__}: {e}")
 
         try:
             logger.info("Scheduler: running 12:05am AEST disaster-stop restarts")
