@@ -293,7 +293,7 @@ def run_disaster_midnight() -> dict:
 
 
 def run_testing_cleanup() -> dict:
-    """12:05am: TESTING ads >7 days old — OFF LOW ROAS / OFF LOW SPEND (last 7 days)."""
+    """12:05am: ads >7 days old — TESTING: OFF LOW ROAS / OFF LOW SPEND; SCALE: OFF LOW SPEND (last 7 days)."""
     dry_run = _dry_run()
     per_account = []
     for config in _per_account_configs():

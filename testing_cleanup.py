@@ -8,6 +8,9 @@ more than 7 days ago, over the last 7 complete days (same as Ads Manager's
   1. 7d spend > $175 & 7d ROAS < 1.2  -> pause + rename "<name> - OFF LOW ROAS"
   2. 7d spend < $10                    -> pause + rename "<name> - OFF LOW SPEND"
 
+SCALE campaigns (SCALE as a word in the name, incl. SCALE | CBO) get rule 2
+(LOW SPEND) only.
+
 Ads with no delivery in the window count as $0 spend. Skips ads / adsets
 with OFF or RUN in the name. OFF keeps them off at midnight.
 """
@@ -22,11 +25,12 @@ from config import Config
 from meta_api import API_BASE
 from midnight_restart import _http_get_json
 from scale_retire import _fetch_ads_7d, _rename
-from stop_loss import _is_testing_campaign, _update_ad_status
+from stop_loss import _is_scale_campaign, _is_testing_campaign, _update_ad_status
 
 logger = logging.getLogger(__name__)
 
 TESTING_CLEANUP_ENABLED = True
+SCALE_LOW_SPEND_ENABLED = True
 MIN_AD_AGE_DAYS = 7
 LOW_ROAS_SPEND = 175.0
 LOW_ROAS = 1.2
@@ -46,7 +50,15 @@ class CleanupAction:
     reason: str = ""
 
 
-def _fetch_active_testing_ads(config: Config) -> list[dict]:
+def _group(campaign_name: str) -> str | None:
+    if _is_testing_campaign(campaign_name):
+        return "testing" if TESTING_CLEANUP_ENABLED else None
+    if _is_scale_campaign(campaign_name):
+        return "scale" if SCALE_LOW_SPEND_ENABLED else None
+    return None
+
+
+def _fetch_active_ads(config: Config) -> list[dict]:
     url = f"{API_BASE}/{config.meta_ad_account_id}/ads"
     params = {
         "access_token": config.meta_access_token,
@@ -61,9 +73,11 @@ def _fetch_active_testing_ads(config: Config) -> list[dict]:
         first = False
         for row in data.get("data", []):
             campaign = (row.get("campaign") or {}).get("name", "")
-            if not _is_testing_campaign(campaign):
+            group = _group(campaign)
+            if not group:
                 continue
             ads.append({
+                "group": group,
                 "id": row["id"],
                 "name": row.get("name", "Unknown"),
                 "created_time": row.get("created_time", ""),
@@ -71,22 +85,26 @@ def _fetch_active_testing_ads(config: Config) -> list[dict]:
                 "adset_name": (row.get("adset") or {}).get("name", "Unknown"),
             })
         url = data.get("paging", {}).get("next")
-    logger.info(f"Testing clean-up: {len(ads)} active TESTING ads")
+    logger.info(f"Clean-up: {len(ads)} active TESTING/SCALE ads")
     return ads
 
 
 def run_testing_cleanup(config: Config, dry_run: bool = False) -> list[CleanupAction]:
-    if not TESTING_CLEANUP_ENABLED:
-        logger.info("Testing clean-up: DISABLED — skipping")
+    if not (TESTING_CLEANUP_ENABLED or SCALE_LOW_SPEND_ENABLED):
+        logger.info("Clean-up: DISABLED — skipping")
         return []
 
-    active = _fetch_active_testing_ads(config)
+    active = _fetch_active_ads(config)
     if not active:
         return []
     metrics: dict[str, dict] = {}
     # Upper and title case in case Meta's CONTAIN filter is case-sensitive.
-    for kw in ("TESTING", "Testing"):
-        metrics.update(_fetch_ads_7d(config, kw, _is_testing_campaign))
+    if any(a["group"] == "testing" for a in active):
+        for kw in ("TESTING", "Testing"):
+            metrics.update(_fetch_ads_7d(config, kw, _is_testing_campaign))
+    if any(a["group"] == "scale" for a in active):
+        for kw in ("SCALE", "Scale"):
+            metrics.update(_fetch_ads_7d(config, kw, _is_scale_campaign))
 
     now = datetime.now(timezone.utc)
     actions: list[CleanupAction] = []
@@ -104,7 +122,7 @@ def run_testing_cleanup(config: Config, dry_run: bool = False) -> list[CleanupAc
         m = metrics.get(ad["id"], {})
         spend = m.get("spend", 0.0)
         roas = m.get("revenue", 0.0) / spend if spend else 0.0
-        if spend > LOW_ROAS_SPEND and roas < LOW_ROAS:
+        if ad["group"] == "testing" and spend > LOW_ROAS_SPEND and roas < LOW_ROAS:
             label, why = "LOW ROAS", f"7d spend ${spend:.2f} > ${LOW_ROAS_SPEND:.0f} & ROAS {roas:.2f} < {LOW_ROAS}"
         elif spend < LOW_SPEND:
             label, why = "LOW SPEND", f"7d spend ${spend:.2f} < ${LOW_SPEND:.0f}"
@@ -133,10 +151,10 @@ def send_testing_cleanup_report(actions: list[CleanupAction], dry_run: bool, con
         return True
     mode = "DRY RUN" if dry_run else "LIVE"
     blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"🧹 Testing clean-up — {len(actions)}"}},
+        {"type": "header", "text": {"type": "plain_text", "text": f"🧹 Ad clean-up — {len(actions)}"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": (
-            f"*[{mode}]* TESTING ads older than {MIN_AD_AGE_DAYS} days, last 7 days: "
-            f"spend>${LOW_ROAS_SPEND:.0f} & ROAS<{LOW_ROAS} → OFF LOW ROAS │ spend<${LOW_SPEND:.0f} → OFF LOW SPEND. "
+            f"*[{mode}]* Ads older than {MIN_AD_AGE_DAYS} days, last 7 days. TESTING: "
+            f"spend>${LOW_ROAS_SPEND:.0f} & ROAS<{LOW_ROAS} → OFF LOW ROAS │ TESTING + SCALE: spend<${LOW_SPEND:.0f} → OFF LOW SPEND. "
             f"Remove OFF from the name to bring one back."
         )}]},
     ]
@@ -147,7 +165,7 @@ def send_testing_cleanup_report(actions: list[CleanupAction], dry_run: bool, con
         lines = []
         for a in group[:25]:
             note = "" if a.action in ("retired", "would_retire") else f" *({a.action}: {a.reason})*"
-            lines.append(f"• *{a.ad_name}* — `{a.adset_name}` │ 7d ${a.spend_7d:,.2f} @ {a.roas_7d:.2f}x{note}")
+            lines.append(f"• *{a.ad_name}* — `{a.campaign_name}` / `{a.adset_name}` │ 7d ${a.spend_7d:,.2f} @ {a.roas_7d:.2f}x{note}")
         if len(group) > 25:
             lines.append(f"_+{len(group) - 25} more_")
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*OFF {label}*\n" + "\n".join(lines)}})
