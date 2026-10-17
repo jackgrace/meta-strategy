@@ -45,6 +45,7 @@ from testing_ad_rules import (
 )
 from disaster_stop import run_disaster_stop as _run_disaster_stop, run_disaster_midnight as _run_disaster_midnight, send_disaster_report
 from testing_cleanup import run_testing_cleanup as _run_testing_cleanup, send_testing_cleanup_report
+from cap_report import build_cap_report, send_cap_report
 from slack_reporter import send_testing_missed_opps, send_early_fatigue_report
 
 logging.basicConfig(
@@ -307,6 +308,24 @@ def run_testing_cleanup() -> dict:
             "failed": sum(1 for a in actions if a.action in ("failed", "paused (rename failed)")),
         })
     return {"status": "ok", "mode": "DRY RUN" if dry_run else "LIVE", "per_account": per_account}
+
+
+def run_cap_report() -> dict:
+    """9am: cost/bid cap guidance per adset (report only)."""
+    per_account = []
+    for config in _per_account_configs():
+        logger.info(f"--- Cap report: account {config.meta_ad_account_id} ---")
+        rows = build_cap_report(config)
+        send_cap_report(rows, config)
+        per_account.append({
+            "account": config.meta_ad_account_id,
+            "adsets": [
+                {"adset": r.adset_name, "campaign": r.campaign_name, "cap": r.cap, "roas_3d": round(r.roas3, 2),
+                 "roas_7d": round(r.roas7, 2), "verdict": r.verdict, "suggestion": r.suggestion}
+                for r in rows
+            ],
+        })
+    return {"status": "ok", "per_account": per_account}
 
 
 def run_scale_retire() -> dict:

@@ -36,6 +36,7 @@ from main import (
     run_disaster_stop,
     run_disaster_midnight,
     run_testing_cleanup,
+    run_cap_report,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._run_disaster_stop_endpoint(source="http")
         elif self.path == "/testing-cleanup":
             self._run_testing_cleanup_endpoint(source="http")
+        elif self.path == "/cap-report":
+            self._run_cap_report_endpoint(source="http")
         else:
             self._respond(404, {"error": "not found"})
 
@@ -187,6 +190,15 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(200, result)
         except Exception as e:
             logger.error(f"Ad kill 3d failed: {e}")
+            self._respond(500, {"status": "error", "message": str(e)})
+
+    def _run_cap_report_endpoint(self, source: str):
+        logger.info(f"Manual trigger via {source} — cap report")
+        try:
+            result = run_cap_report()
+            self._respond(200, result)
+        except Exception as e:
+            logger.error(f"Cap report failed: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
 
     def _run_testing_cleanup_endpoint(self, source: str):
@@ -560,6 +572,22 @@ def _run_testing_kill_scheduler():
         time.sleep(60 * 60)
 
 
+def _run_cap_report_scheduler():
+    """Background thread: cost/bid cap guidance report at 9am AEST daily."""
+    while True:
+        now = datetime.now(AEST)
+        next_run = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        if next_run <= now:
+            next_run += timedelta(days=1)
+        time.sleep((next_run - now).total_seconds())
+        try:
+            logger.info("Scheduler: running 9am AEST cap report")
+            run_cap_report()
+        except Exception as e:
+            logger.error(f"Cap report failed: {e}")
+            _send_stop_loss_failure(f"cap-report: {type(e).__name__}: {e}")
+
+
 def _run_midnight_restart_scheduler():
     """Background thread: runs the midnight adset restart at 12:05am AEST."""
     while True:
@@ -640,6 +668,10 @@ def start_server():
     midnight_thread = threading.Thread(target=_run_midnight_restart_scheduler, daemon=True)
     midnight_thread.start()
     logger.info("Midnight-restart scheduler started (12:05am AEST daily)")
+
+    cap_report_thread = threading.Thread(target=_run_cap_report_scheduler, daemon=True)
+    cap_report_thread.start()
+    logger.info("Cap-report scheduler started (9am AEST daily)")
 
     server = HTTPServer(("0.0.0.0", port), TriggerHandler)
     logger.info(f"Server listening on port {port}")
