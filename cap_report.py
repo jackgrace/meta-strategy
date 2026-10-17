@@ -1,5 +1,5 @@
 """
-Cost cap / bid cap guidance report. Daily at 9am AEST, report only — never
+Cost cap / bid cap guidance report. Daily at 1am AEST, report only — never
 changes anything in the account.
 
 For every ACTIVE adset on a cost cap or bid cap (set on the adset, or

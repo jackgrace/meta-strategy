@@ -311,7 +311,7 @@ def run_testing_cleanup() -> dict:
 
 
 def run_cap_report() -> dict:
-    """9am: cost/bid cap guidance per adset (report only)."""
+    """1am: cost/bid cap guidance per adset (report only)."""
     per_account = []
     for config in _per_account_configs():
         logger.info(f"--- Cap report: account {config.meta_ad_account_id} ---")

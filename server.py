@@ -573,15 +573,15 @@ def _run_testing_kill_scheduler():
 
 
 def _run_cap_report_scheduler():
-    """Background thread: cost/bid cap guidance report at 9am AEST daily."""
+    """Background thread: cost/bid cap guidance report at 1am AEST daily."""
     while True:
         now = datetime.now(AEST)
-        next_run = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        next_run = now.replace(hour=1, minute=0, second=0, microsecond=0)
         if next_run <= now:
             next_run += timedelta(days=1)
         time.sleep((next_run - now).total_seconds())
         try:
-            logger.info("Scheduler: running 9am AEST cap report")
+            logger.info("Scheduler: running 1am AEST cap report")
             run_cap_report()
         except Exception as e:
             logger.error(f"Cap report failed: {e}")
@@ -671,7 +671,7 @@ def start_server():
 
     cap_report_thread = threading.Thread(target=_run_cap_report_scheduler, daemon=True)
     cap_report_thread.start()
-    logger.info("Cap-report scheduler started (9am AEST daily)")
+    logger.info("Cap-report scheduler started (1am AEST daily)")
 
     server = HTTPServer(("0.0.0.0", port), TriggerHandler)
     logger.info(f"Server listening on port {port}")
