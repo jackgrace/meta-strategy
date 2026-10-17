@@ -5,7 +5,7 @@ Looks at every ACTIVE ad in a campaign whose name contains TESTING, created
 more than 7 days ago, over the last 7 complete days (same as Ads Manager's
 "Last 7 days", today excluded):
 
-  1. 7d spend > $175 & 7d ROAS < 1.2  -> pause + rename "<name> - OFF LOW ROAS"
+  1. 7d spend > $175 & 7d ROAS < 1.0  -> pause + rename "<name> - OFF LOW ROAS"
   2. 7d spend < $10                    -> pause + rename "<name> - OFF LOW SPEND"
 
 SCALE campaigns (SCALE as a word in the name, incl. SCALE | CBO) get rule 2
@@ -33,7 +33,7 @@ TESTING_CLEANUP_ENABLED = True
 SCALE_LOW_SPEND_ENABLED = True
 MIN_AD_AGE_DAYS = 7
 LOW_ROAS_SPEND = 175.0
-LOW_ROAS = 1.2
+LOW_ROAS = 1.0
 LOW_SPEND = 10.0
 
 
