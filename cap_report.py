@@ -6,7 +6,7 @@ For every ACTIVE adset on a cost cap or bid cap (set on the adset, or
 inherited from a campaign-budget campaign), using complete days only:
   - cap, 3-day and 7-day ROAS, cost per purchase vs cap, spend
   - budget use over 7 days (is the cap holding spend back?)
-  - trend: last 3 days vs last 7
+  - trend: last 3 days vs last 7 (ROAS and spend per day)
 
 Guidance (both windows must agree):
   🟢 ROAS >= 1.2 on 3d and 7d   -> raise cap ~10% (5% if the 3d trend is
@@ -224,13 +224,15 @@ def send_cap_report(rows: list[CapRow], config: Config) -> bool:
         lines = []
         for r in group[:12]:
             arrow = "↑" if r.roas3 > r.roas7 * 1.05 else "↓" if r.roas3 < r.roas7 * 0.95 else "→"
+            per_day3, per_day7 = r.spend3 / 3, r.spend7 / 7
+            spend_arrow = "↑" if per_day3 > per_day7 * 1.05 else "↓" if per_day3 < per_day7 * 0.95 else "→"
             use = f"{r.budget_use:.0%} of {r.budget_scope} budget" if r.budget_use is not None else "no daily budget"
             cpa7 = f"${r.cpa7:.2f}" if r.cpa7 else "—"
             cpa3 = f"${r.cpa3:.2f}" if r.cpa3 else "—"
             lines.append(
                 f"• *{r.adset_name}* — `{r.campaign_name}`\n"
-                f"   {r.cap_type} ${r.cap:.2f} │ 7d: ROAS {r.roas7:.2f}x, CPA {cpa7}, ${r.spend7:,.0f}, {r.purchases7}p │ "
-                f"3d: ROAS {r.roas3:.2f}x {arrow}, CPA {cpa3} │ {use}\n"
+                f"   {r.cap_type} ${r.cap:.2f} │ 7d: ROAS {r.roas7:.2f}x, CPA {cpa7}, ${r.spend7:,.0f} (${per_day7:,.0f}/day), {r.purchases7}p │ "
+                f"3d: ROAS {r.roas3:.2f}x {arrow}, CPA {cpa3}, ${r.spend3:,.0f} (${per_day3:,.0f}/day {spend_arrow}) │ {use}\n"
                 f"   ➜ *{r.suggestion}*"
             )
         if len(group) > 12:
