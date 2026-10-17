@@ -10,6 +10,9 @@ Otherwise, pause an ACTIVE ad for the rest of today if either:
   B. today spend > $150 & today cost/ATC > max(3x peers' 7-day cost/ATC, $30)
   C. today spend > $300 & ROAS < 1.0 (whatever purchases or ATCs)
   (A and B are currently switched off — emergency check C only.)
+  C exception: not paused if the ad has >= 50% of its adset's spend today
+  and its ATCs today cost no more than the other ads' 7-day average
+  (likely feeding the funnel). An ad alone in its adset isn't protected.
      (0 ATCs today counts; peers = the other ads in the same adset over the
       last 7 days incl. today — the ad itself is left out)
 
@@ -47,6 +50,10 @@ LOSS_ROAS = 1.0
 # working. Kept so they can be switched back on.
 NO_PURCHASE_CHECK_ENABLED = False
 ATC_CHECK_ENABLED = False
+# Funnel-feeder exception for check C: an ad taking the majority of its
+# adset's spend today whose ATCs cost no more than its peers' 7-day average
+# is likely feeding the funnel, so it's left running.
+FEEDER_SPEND_SHARE = 0.5
 
 
 @dataclass
@@ -67,12 +74,29 @@ def _fetch(config: Config, since: date, until: date) -> list[dict]:
     return rows
 
 
+def _is_feeder(ad_id: str, d: dict, ads7: dict, adsets7: dict, adsets_day: dict) -> bool:
+    """Majority of the adset's spend today AND ATCs no dearer than peers' 7d avg."""
+    adset_id = d["meta"]["adset_id"]
+    day_total = adsets_day[adset_id]["spend"]
+    if day_total <= d["spend"]:          # alone in the adset today: nothing to compare
+        return False
+    if d["spend"] / day_total < FEEDER_SPEND_SHARE or d["atcs"] == 0:
+        return False
+    s7, a7 = adsets7[adset_id], ads7[ad_id]
+    peer_atcs = s7["atcs"] - a7["atcs"]
+    if peer_atcs <= 0:
+        return False
+    peer_cpa = (s7["spend"] - a7["spend"]) / peer_atcs
+    return d["spend"] / d["atcs"] <= peer_cpa
+
+
 def evaluate(rows: list[dict], as_of: date) -> dict[str, str]:
     """ad_id -> reason for ads hitting a disaster check on `as_of`."""
     window = [r for r in rows if as_of - timedelta(days=PEER_DAYS - 1) <= r["date"] <= as_of]
     day_ads = _aggregate([r for r in rows if r["date"] == as_of], "ad_id")
     ads7 = _aggregate(window, "ad_id")
     adsets7 = _aggregate(window, "adset_id")
+    adsets_day = _aggregate([r for r in rows if r["date"] == as_of], "adset_id")
     reasons: dict[str, str] = {}
     for ad_id, d in day_ads.items():
         spend = d["spend"]
@@ -82,7 +106,7 @@ def evaluate(rows: list[dict], as_of: date) -> dict[str, str]:
             reasons[ad_id] = f"today ${spend:.2f} > ${NO_PURCHASE_SPEND:.0f} with 0 purchases"
             continue
         roas = d["revenue"] / spend if spend else 0
-        if spend > LOSS_SPEND and roas < LOSS_ROAS:
+        if spend > LOSS_SPEND and roas < LOSS_ROAS and not _is_feeder(ad_id, d, ads7, adsets7, adsets_day):
             reasons[ad_id] = f"today ${spend:.2f} > ${LOSS_SPEND:.0f} with ROAS {roas:.2f} < {LOSS_ROAS:g}"
             continue
         if not ATC_CHECK_ENABLED or spend <= ATC_SPEND:
@@ -179,6 +203,7 @@ def send_disaster_report(actions: list[DisasterAction], dry_run: bool, config: C
         {"type": "header", "text": {"type": "plain_text", "text": f"🛡️ {title} — {len(actions)}"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": (
             f"*[{mode}]* All campaigns. Emergency only: today spend>${LOSS_SPEND:.0f} & ROAS<{LOSS_ROAS:g} "
+            f"unless it has ≥{FEEDER_SPEND_SHARE:.0%} of its adset's spend with ATCs no dearer than the adset's 7d avg "
             f"→ paused for today, back on if it recovers or at midnight. No OFF added."
         )}]},
     ]
