@@ -8,7 +8,7 @@ An ad at ROAS >= 1.2 today is never paused, whatever its cost per ATC.
 Otherwise, pause an ACTIVE ad for the rest of today if either:
   A. today spend > $120 & 0 purchases today
   B. today spend > $150 & today cost/ATC > max(3x peers' 7-day cost/ATC, $30)
-  C. today spend > $300 & ROAS < 1.0 (whatever purchases or ATCs)
+  C. today spend > $200 & ROAS < 1.2 & the whole adset today < 1.2 (whatever purchases or ATCs)
   (A and B are currently switched off — emergency check C only.)
      (0 ATCs today counts; peers = the other ads in the same adset over the
       last 7 days incl. today — the ad itself is left out)
@@ -41,8 +41,9 @@ ATC_PEER_MULT = 3.0
 ATC_FLOOR = 30.0               # never trigger below $30 per ATC
 PEER_DAYS = 7
 PROTECT_ROAS = 1.2             # ad ROAS today >= this -> never paused
-LOSS_SPEND = 300.0             # emergency only: ad clearly bugging out
-LOSS_ROAS = 1.0
+LOSS_SPEND = 200.0
+LOSS_ROAS = 1.2
+LOSS_ADSET_ROAS = 1.2          # only when the whole adset is also below this today
 # Earlier, tighter checks — off: they paused too many ads that were still
 # working. Kept so they can be switched back on.
 NO_PURCHASE_CHECK_ENABLED = False
@@ -73,6 +74,7 @@ def evaluate(rows: list[dict], as_of: date) -> dict[str, str]:
     day_ads = _aggregate([r for r in rows if r["date"] == as_of], "ad_id")
     ads7 = _aggregate(window, "ad_id")
     adsets7 = _aggregate(window, "adset_id")
+    adsets_day = _aggregate([r for r in rows if r["date"] == as_of], "adset_id")
     reasons: dict[str, str] = {}
     for ad_id, d in day_ads.items():
         spend = d["spend"]
@@ -82,8 +84,11 @@ def evaluate(rows: list[dict], as_of: date) -> dict[str, str]:
             reasons[ad_id] = f"today ${spend:.2f} > ${NO_PURCHASE_SPEND:.0f} with 0 purchases"
             continue
         roas = d["revenue"] / spend if spend else 0
-        if spend > LOSS_SPEND and roas < LOSS_ROAS:
-            reasons[ad_id] = f"today ${spend:.2f} > ${LOSS_SPEND:.0f} with ROAS {roas:.2f} < {LOSS_ROAS:g}"
+        s_day = adsets_day[d["meta"]["adset_id"]]
+        adset_roas = s_day["revenue"] / s_day["spend"] if s_day["spend"] else 0
+        if spend > LOSS_SPEND and roas < LOSS_ROAS and adset_roas < LOSS_ADSET_ROAS:
+            reasons[ad_id] = (f"today ${spend:.2f} > ${LOSS_SPEND:.0f} with ROAS {roas:.2f} < {LOSS_ROAS:g}, "
+                              f"adset {adset_roas:.2f}x < {LOSS_ADSET_ROAS:g}")
             continue
         if not ATC_CHECK_ENABLED or spend <= ATC_SPEND:
             continue
@@ -178,7 +183,7 @@ def send_disaster_report(actions: list[DisasterAction], dry_run: bool, config: C
     blocks = [
         {"type": "header", "text": {"type": "plain_text", "text": f"🛡️ {title} — {len(actions)}"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": (
-            f"*[{mode}]* All campaigns. Emergency only: today spend>${LOSS_SPEND:.0f} & ROAS<{LOSS_ROAS:g} "
+            f"*[{mode}]* All campaigns. Today spend>${LOSS_SPEND:.0f} & ROAS<{LOSS_ROAS:g} & adset ROAS<{LOSS_ADSET_ROAS:g} "
             f"→ paused for today, back on if it recovers or at midnight. No OFF added."
         )}]},
     ]
