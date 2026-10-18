@@ -9,6 +9,8 @@ Otherwise, pause an ACTIVE ad for the rest of today if either:
   A. today spend > $120 & 0 purchases today
   B. today spend > $150 & today cost/ATC > max(3x peers' 7-day cost/ATC, $30)
   C. today spend > $150 & ROAS < 1.2 & the whole adset today < 1.2 (whatever purchases or ATCs)
+     Same-day restart only when the ad's own ROAS gets back to 1.2 — the
+     adset recovering isn't enough (pausing the ad lifts the adset itself).
   (A and B are currently switched off — emergency check C only.)
      (0 ATCs today counts; peers = the other ads in the same adset over the
       last 7 days incl. today — the ad itself is left out)
@@ -68,8 +70,13 @@ def _fetch(config: Config, since: date, until: date) -> list[dict]:
     return rows
 
 
-def evaluate(rows: list[dict], as_of: date) -> dict[str, str]:
-    """ad_id -> reason for ads hitting a disaster check on `as_of`."""
+def evaluate(rows: list[dict], as_of: date, for_restart: bool = False) -> dict[str, str]:
+    """ad_id -> reason for ads hitting a disaster check on `as_of`.
+
+    for_restart: drop the adset-ROAS condition. Pausing a weak ad lifts its
+    adset's ROAS on its own, so only the ad's own recovery should bring it
+    back the same day (otherwise it flips on and off all day).
+    """
     window = [r for r in rows if as_of - timedelta(days=PEER_DAYS - 1) <= r["date"] <= as_of]
     day_ads = _aggregate([r for r in rows if r["date"] == as_of], "ad_id")
     ads7 = _aggregate(window, "ad_id")
@@ -86,7 +93,7 @@ def evaluate(rows: list[dict], as_of: date) -> dict[str, str]:
         roas = d["revenue"] / spend if spend else 0
         s_day = adsets_day[d["meta"]["adset_id"]]
         adset_roas = s_day["revenue"] / s_day["spend"] if s_day["spend"] else 0
-        if spend > LOSS_SPEND and roas < LOSS_ROAS and adset_roas < LOSS_ADSET_ROAS:
+        if spend > LOSS_SPEND and roas < LOSS_ROAS and (for_restart or adset_roas < LOSS_ADSET_ROAS):
             reasons[ad_id] = (f"today ${spend:.2f} > ${LOSS_SPEND:.0f} with ROAS {roas:.2f} < {LOSS_ROAS:g}, "
                               f"adset {adset_roas:.2f}x < {LOSS_ADSET_ROAS:g}")
             continue
@@ -129,7 +136,9 @@ def run_disaster_stop(config: Config, dry_run: bool = False) -> list[DisasterAct
     floor = min([LOSS_SPEND]
                 + ([NO_PURCHASE_SPEND] if NO_PURCHASE_CHECK_ENABLED else [])
                 + ([ATC_SPEND] if ATC_CHECK_ENABLED else []))
-    recover = {a for a, d in day_ads.items() if d["spend"] > floor and a not in flagged}
+    still_bad = evaluate(rows, today, for_restart=True)
+    recover = {a for a, d in day_ads.items() if d["spend"] > floor and a not in still_bad}
+    day_adsets = _aggregate([r for r in rows if r["date"] == today], "adset_id")
     if not (flagged or recover):
         return []
 
@@ -145,8 +154,10 @@ def run_disaster_stop(config: Config, dry_run: bool = False) -> list[DisasterAct
             actions.append(_act(config, ad_id, d, name, adset_name, "PAUSED", "pause",
                                 flagged[ad_id] + " — paused for today", dry_run))
         elif ad_id in recover and status == "PAUSED":
-            actions.append(_act(config, ad_id, d, name, adset_name, "ACTIVE", "activate",
-                                "disaster checks no longer apply today", dry_run))
+            s_day = day_adsets[d["meta"]["adset_id"]]
+            why = (f"recovered: ad {d['revenue'] / d['spend']:.2f}x, "
+                   f"adset {(s_day['revenue'] / s_day['spend'] if s_day['spend'] else 0):.2f}x today")
+            actions.append(_act(config, ad_id, d, name, adset_name, "ACTIVE", "activate", why, dry_run))
     return actions
 
 
@@ -184,7 +195,7 @@ def send_disaster_report(actions: list[DisasterAction], dry_run: bool, config: C
         {"type": "header", "text": {"type": "plain_text", "text": f"🛡️ {title} — {len(actions)}"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": (
             f"*[{mode}]* All campaigns. Today spend>${LOSS_SPEND:.0f} & ROAS<{LOSS_ROAS:g} & adset ROAS<{LOSS_ADSET_ROAS:g} "
-            f"→ paused for today, back on if it recovers or at midnight. No OFF added."
+            f"→ paused for today, back on if the ad itself recovers to {LOSS_ROAS:g}x or at midnight. No OFF added."
         )}]},
     ]
     for heading, kinds in groups:
