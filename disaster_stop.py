@@ -36,7 +36,7 @@ from testing_ad_rules import _aggregate, _fetch_daily, _names, _today
 
 logger = logging.getLogger(__name__)
 
-DISASTER_STOP_ENABLED = True
+DISASTER_STOP_ENABLED = False
 NO_PURCHASE_SPEND = 120.0      # ~2x target cost per purchase
 ATC_SPEND = 150.0
 ATC_PEER_MULT = 3.0
