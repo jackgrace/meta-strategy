@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 TESTING_CLEANUP_ENABLED = True
 SCALE_LOW_SPEND_ENABLED = True
 MIN_AD_AGE_DAYS = 7
+LOW_ROAS_ENABLED = False      # OFF LOW ROAS paused; OFF LOW SPEND still runs
 LOW_ROAS_SPEND = 175.0
 LOW_ROAS = 1.0
 LOW_SPEND = 10.0
@@ -122,7 +123,7 @@ def run_testing_cleanup(config: Config, dry_run: bool = False) -> list[CleanupAc
         m = metrics.get(ad["id"], {})
         spend = m.get("spend", 0.0)
         roas = m.get("revenue", 0.0) / spend if spend else 0.0
-        if ad["group"] == "testing" and spend > LOW_ROAS_SPEND and roas < LOW_ROAS:
+        if LOW_ROAS_ENABLED and ad["group"] == "testing" and spend > LOW_ROAS_SPEND and roas < LOW_ROAS:
             label, why = "LOW ROAS", f"7d spend ${spend:.2f} > ${LOW_ROAS_SPEND:.0f} & ROAS {roas:.2f} < {LOW_ROAS}"
         elif spend < LOW_SPEND:
             label, why = "LOW SPEND", f"7d spend ${spend:.2f} < ${LOW_SPEND:.0f}"
