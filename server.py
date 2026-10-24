@@ -61,6 +61,8 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._manual_activate()
         elif self.path.startswith("/set-adset-roas"):
             self._set_adset_roas()
+        elif self.path.startswith("/google-change-log"):
+            self._google_change_log()
         elif self.path == "/stoploss":
             self._run_stop_loss_endpoint(source="http")
         elif self.path == "/testing-kill":
@@ -272,6 +274,28 @@ class TriggerHandler(BaseHTTPRequestHandler):
         except Exception as e:
             logger.error(f"CBO ad kill 3d failed: {e}")
             self._respond(500, {"status": "error", "message": str(e)})
+
+    def _google_change_log(self):
+        """/google-change-log?days=7 — Google Ads changes by person (read only)."""
+        from urllib.parse import urlparse, parse_qs
+        from google_change_log import GoogleAdsError, fetch_changes, send_change_log
+
+        qs = parse_qs(urlparse(self.path).query)
+        try:
+            days = int((qs.get("days") or ["7"])[0])
+        except ValueError:
+            days = 7
+        days = max(1, min(days, 30))
+        try:
+            changes = fetch_changes(days)
+            send_change_log(changes, days, os.environ["SLACK_WEBHOOK_URL"].strip())
+            self._respond(200, {"status": "ok", "days": days, "count": len(changes), "changes": changes})
+        except GoogleAdsError as e:
+            logger.error(f"Google change log failed: {e}")
+            self._respond(500, {"status": "error", "message": str(e)})
+        except Exception as e:
+            logger.error(f"Google change log failed: {e}")
+            self._respond(500, {"status": "error", "message": f"{type(e).__name__}: {e}"})
 
     def _set_adset_roas(self):
         """Set the min-ROAS bid target on an adset:
