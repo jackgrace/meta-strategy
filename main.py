@@ -46,6 +46,7 @@ from testing_ad_rules import (
 from disaster_stop import run_disaster_stop as _run_disaster_stop, run_disaster_midnight as _run_disaster_midnight, send_disaster_report
 from testing_cleanup import run_testing_cleanup as _run_testing_cleanup, send_testing_cleanup_report
 from cap_report import build_cap_report, send_cap_report
+from adset_roas_restart import run_adset_roas_restart as _run_adset_roas_restart, send_adset_roas_restart_report
 from slack_reporter import send_testing_missed_opps, send_early_fatigue_report
 
 logging.basicConfig(
@@ -332,6 +333,33 @@ def run_cap_report() -> dict:
             ],
         })
     return {"status": "ok", "per_account": per_account}
+
+
+def run_adset_roas_restart() -> dict:
+    """Every 15 min: switch paused adsets back on when today's ROAS > 1.1."""
+    dry_run = _dry_run()
+    per_account = []
+    for config in _per_account_configs():
+        actions = _run_adset_roas_restart(config, dry_run=dry_run)
+        send_adset_roas_restart_report(actions, dry_run, config)
+        per_account.append({"account": config.meta_ad_account_id,
+                            "activated": sum(1 for a in actions if a.action in ("activated", "would_activate"))})
+    return {"status": "ok", "mode": "DRY RUN" if dry_run else "LIVE", "per_account": per_account}
+
+
+def run_midnight_restart_preview() -> dict:
+    """Dry run of the midnight restart: what it would switch on right now. Changes nothing."""
+    per_account = []
+    for config in _per_account_configs():
+        adsets, ads = _run_midnight_restart(config, dry_run=True)
+        per_account.append({
+            "account": config.meta_ad_account_id,
+            "adsets_would_activate": [{"adset": a.adset_name, "campaign": a.campaign_name}
+                                      for a in adsets if a.action == "would_activate"],
+            "ads_would_activate": [{"ad": a.ad_name, "adset": a.adset_name, "campaign": a.campaign_name}
+                                   for a in ads if a.action == "would_activate"],
+        })
+    return {"status": "ok", "mode": "PREVIEW (nothing changed)", "per_account": per_account}
 
 
 def run_scale_retire() -> dict:

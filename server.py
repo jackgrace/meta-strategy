@@ -37,6 +37,8 @@ from main import (
     run_disaster_midnight,
     run_testing_cleanup,
     run_cap_report,
+    run_adset_roas_restart,
+    run_midnight_restart_preview,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,6 +91,12 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._run_testing_cleanup_endpoint(source="http")
         elif self.path == "/cap-report":
             self._run_cap_report_endpoint(source="http")
+        elif self.path == "/midnight-restart-preview":
+            try:
+                self._respond(200, run_midnight_restart_preview())
+            except Exception as e:
+                logger.error(f"Midnight restart preview failed: {e}")
+                self._respond(500, {"status": "error", "message": str(e)})
         else:
             self._respond(404, {"error": "not found"})
 
@@ -571,6 +579,12 @@ def _run_stop_loss_scheduler():
         except Exception as e:
             logger.error(f"Testing ad rules failed: {e}")
             _send_stop_loss_failure(f"testing-ad-rules: {type(e).__name__}: {e}")
+        try:
+            logger.info("Scheduler: running 15-min adset ROAS restart")
+            run_adset_roas_restart()
+        except Exception as e:
+            logger.error(f"Adset ROAS restart failed: {e}")
+            _send_stop_loss_failure(f"adset-roas-restart: {type(e).__name__}: {e}")
         try:
             logger.info("Scheduler: running 15-min ad disaster stop")
             run_disaster_stop()

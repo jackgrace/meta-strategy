@@ -4,11 +4,9 @@ Midnight restart rules.
 Runs daily at 12:05am AEST.
 
 ADSET rule — turn ON adset IF:
-- Parent campaign is ACTIVE
-- Parent campaign had spend > $1 yesterday
-  OR campaign name matches an ADSET_RESTART_BYPASS_KEYWORD_GROUPS
-  entry (e.g. SCALE+VALUE campaigns bypass the spend gate so their
-  adsets can wake even after a $0 day)
+- Parent campaign is ACTIVE (delivery on) — no spend gate
+  (ADSET_RESTART_ALL_ACTIVE_CAMPAIGNS; when off, the old gate applies:
+  campaign spent > $1 yesterday OR matches a bypass keyword group)
 - Adset name does NOT contain 'OFF'
 - Adset is currently PAUSED
 
@@ -44,6 +42,10 @@ MIDNIGHT_SKIP_TESTING_ADS = True
 # even if the campaign had $0 impressions yesterday. Whole-word match.
 # Example: ("SCALE", "VALUE") matches "SCALE | US | VALUE" and
 # "SCALE | VALUE | AU" but not "SCALE | US" or "VALUE | US".
+# Restart paused adsets in every ACTIVE campaign, whatever it spent
+# yesterday (a campaign whose adsets were all paused shows $0 and was missed).
+ADSET_RESTART_ALL_ACTIVE_CAMPAIGNS = True
+
 ADSET_RESTART_BYPASS_KEYWORD_GROUPS: list[tuple[str, ...]] = [
     ("SCALE", "VALUE"),
 ]
@@ -208,6 +210,26 @@ def _fetch_bypass_campaigns(config: Config) -> dict:
     return out
 
 
+def _fetch_active_campaigns(config: Config) -> dict:
+    """{campaign_id: {name, effective_status}} for campaigns delivering now."""
+    out: dict = {}
+    url = f"{API_BASE}/{config.meta_ad_account_id}/campaigns"
+    params = {
+        "access_token": config.meta_access_token,
+        "fields": "id,name,effective_status",
+        "limit": 500,
+        "filtering": '[{"field":"effective_status","operator":"IN","value":["ACTIVE"]}]',
+    }
+    while url:
+        data = _http_get_json(config, url, params)
+        for row in data.get("data", []):
+            out[row["id"]] = {"name": row.get("name", ""), "effective_status": row.get("effective_status", "ACTIVE")}
+        url = data.get("paging", {}).get("next")
+        params = None
+    logger.info(f"Midnight restart: {len(out)} ACTIVE campaigns")
+    return out
+
+
 def _fetch_paused_adsets(config: Config) -> list[dict]:
     """
     Fetch all PAUSED adsets in the account.
@@ -315,6 +337,11 @@ def run_midnight_restart(config: Config, dry_run: bool = False) -> tuple[list[Mi
     # Step 1: yesterday's spend per campaign
     campaign_spend = _fetch_yesterday_campaign_spend(config)
 
+    if ADSET_RESTART_ALL_ACTIVE_CAMPAIGNS:
+        campaign_statuses = _fetch_active_campaigns(config)
+        active_campaign_ids = set(campaign_statuses)
+        return _restart_paused_adsets(config, campaign_spend, campaign_statuses, active_campaign_ids, dry_run)
+
     # Step 2: filter to campaigns matching keywords + spend > $1 yesterday.
     # Any campaign that spent yesterday qualifies — no keyword filter.
     # We only need the parent to be active and to have had spend, so we
@@ -351,7 +378,11 @@ def run_midnight_restart(config: Config, dry_run: bool = False) -> tuple[list[Mi
 
     if not active_campaign_ids:
         return [], _run_ad_level_midnight(config, campaign_spend, dry_run)
+    return _restart_paused_adsets(config, campaign_spend, campaign_statuses, active_campaign_ids, dry_run)
 
+
+def _restart_paused_adsets(config: Config, campaign_spend: dict, campaign_statuses: dict,
+                           active_campaign_ids: set, dry_run: bool):
     # Step 4: fetch PAUSED adsets, filter to qualifying campaigns and no OFF
     paused_adsets = _fetch_paused_adsets(config)
     actions: list[MidnightAction] = []
@@ -411,7 +442,8 @@ def run_midnight_restart(config: Config, dry_run: bool = False) -> tuple[list[Mi
     logger.info(
         f"Midnight ADSET restart complete: {activated} activated │ "
         f"{failed} failed │ {skipped_off} skipped OFF │ "
-        f"{skipped_wrong_campaign} skipped (campaign not ACTIVE / no spend yesterday)"
+        f"{skipped_wrong_campaign} skipped (campaign not ACTIVE"
+        f"{'' if ADSET_RESTART_ALL_ACTIVE_CAMPAIGNS else ' / no spend yesterday'})"
     )
 
     # === AD-level midnight restart ===
