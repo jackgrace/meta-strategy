@@ -112,6 +112,12 @@ def run_auto_pause() -> dict:
     """Run the auto-pause check across all configured accounts."""
     dry_run = _dry_run()
     mode = "DRY RUN" if dry_run else "LIVE"
+    # Check the flag before fetching: the fetch pulls every ad on the account
+    # (16k+), which burns Meta's API allowance for nothing when the rule is off.
+    from auto_pause import AUTO_PAUSE_RULE_ENABLED
+    if not AUTO_PAUSE_RULE_ENABLED:
+        logger.info("Auto-pause: DISABLED via AUTO_PAUSE_RULE_ENABLED flag — skipping (no fetch)")
+        return {"status": "ok", "mode": mode, "per_account": [], "disabled": True}
     logger.info(f"=== Auto-pause [{mode}] ===")
 
     per_account = []
