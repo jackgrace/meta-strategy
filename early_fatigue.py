@@ -13,6 +13,7 @@ Spec:
 
 import json
 import logging
+from zoneinfo import ZoneInfo
 import os
 from dataclasses import dataclass, field
 from collections import defaultdict
@@ -23,7 +24,7 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-AEST = timezone(timedelta(hours=10))
+AEST = ZoneInfo("Australia/Melbourne")  # Meta account time zone; handles daylight saving
 
 # Markets to evaluate separately
 MARKETS = ["AU", "UK", "US", "CA", "EU", "UAE"]

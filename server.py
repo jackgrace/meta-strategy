@@ -10,6 +10,7 @@ Endpoints:
 
 import json
 import logging
+from zoneinfo import ZoneInfo
 import os
 import threading
 import time
@@ -43,8 +44,7 @@ from main import (
 
 logger = logging.getLogger(__name__)
 
-# AEST = UTC+10
-AEST = timezone(timedelta(hours=10))
+AEST = ZoneInfo("Australia/Melbourne")  # Meta account time zone; handles daylight saving
 
 
 class TriggerHandler(BaseHTTPRequestHandler):
@@ -477,7 +477,7 @@ def _send_failure_notification(error_msg: str):
     if not webhook:
         return
     try:
-        now = datetime.now(AEST).strftime("%a %d %b %Y %H:%M AEST")
+        now = datetime.now(AEST).strftime("%a %d %b %Y %H:%M %Z")
         requests.post(webhook, json={
             "blocks": [
                 {"type": "header", "text": {"type": "plain_text", "text": f"❌ Daily check failed — {now}"}},
@@ -496,7 +496,7 @@ def _run_daily_scheduler():
         next_run = now.replace(hour=1, minute=0, second=0, microsecond=0)
         if next_run <= now:
             next_run += timedelta(days=1)
-        wait_seconds = (next_run - now).total_seconds()
+        wait_seconds = next_run.timestamp() - now.timestamp()
         logger.info(f"Scheduler: next run at {next_run.isoformat()} ({wait_seconds:.0f}s from now)")
         time.sleep(wait_seconds)
 
@@ -542,7 +542,7 @@ def _send_stop_loss_failure(error_msg: str):
     if not webhook:
         return
     try:
-        now = datetime.now(AEST).strftime("%d %b %H:%M AEST")
+        now = datetime.now(AEST).strftime("%d %b %H:%M %Z")
         requests.post(webhook, json={
             "blocks": [
                 {"type": "header", "text": {"type": "plain_text", "text": f"❌ Stop-loss run failed — {now}"}},
@@ -617,7 +617,7 @@ def _run_cap_report_scheduler():
         next_run = now.replace(hour=1, minute=0, second=0, microsecond=0)
         if next_run <= now:
             next_run += timedelta(days=1)
-        time.sleep((next_run - now).total_seconds())
+        time.sleep(next_run.timestamp() - now.timestamp())
         try:
             logger.info("Scheduler: running 1am AEST cap report")
             run_cap_report()
@@ -634,7 +634,7 @@ def _run_midnight_restart_scheduler():
         next_run = now.replace(hour=0, minute=5, second=0, microsecond=0)
         if next_run <= now:
             next_run += timedelta(days=1)
-        wait_seconds = (next_run - now).total_seconds()
+        wait_seconds = next_run.timestamp() - now.timestamp()
         logger.info(f"Midnight-restart scheduler: next run at {next_run.isoformat()} ({wait_seconds:.0f}s from now)")
         time.sleep(wait_seconds)
 

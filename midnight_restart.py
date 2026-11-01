@@ -19,6 +19,7 @@ AD rule — turn ON ad IF:
 """
 
 import logging
+from zoneinfo import ZoneInfo
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
@@ -30,7 +31,7 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-AEST = timezone(timedelta(hours=10))
+AEST = ZoneInfo("Australia/Melbourne")  # Meta account time zone; handles daylight saving
 
 MIN_YESTERDAY_CAMPAIGN_SPEND = 1.0            # adset rule
 MIN_YESTERDAY_CAMPAIGN_SPEND_ADS = 5.0        # ad rule
@@ -585,7 +586,7 @@ def _run_ad_level_midnight(config: Config, campaign_spend: dict, dry_run: bool) 
 def build_ad_midnight_slack_message(actions: list[MidnightAdAction], dry_run: bool) -> dict | None:
     if not actions:
         return None
-    now = datetime.now(AEST).strftime("%d %b %H:%M AEST")
+    now = datetime.now(AEST).strftime("%d %b %H:%M %Z")
     mode = "DRY RUN" if dry_run else "LIVE"
 
     activated = [a for a in actions if a.action in ("activated", "would_activate")]
@@ -659,7 +660,7 @@ def build_midnight_slack_message(actions: list[MidnightAction], dry_run: bool) -
     if not actions:
         return None
 
-    now = datetime.now(AEST).strftime("%d %b %H:%M AEST")
+    now = datetime.now(AEST).strftime("%d %b %H:%M %Z")
     mode = "DRY RUN" if dry_run else "LIVE"
 
     activated = [a for a in actions if a.action in ("activated", "would_activate")]

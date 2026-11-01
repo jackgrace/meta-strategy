@@ -13,6 +13,7 @@ Dry-run by default — set AUTO_PAUSE_ENABLED=true to go live.
 """
 
 import logging
+from zoneinfo import ZoneInfo
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
@@ -24,7 +25,7 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-AEST = timezone(timedelta(hours=10))
+AEST = ZoneInfo("Australia/Melbourne")  # Meta account time zone; handles daylight saving
 
 # Flip AUTO_PAUSE_RULE_ENABLED to True to re-enable the daily low-spend kill.
 AUTO_PAUSE_RULE_ENABLED = False

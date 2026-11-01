@@ -8,6 +8,7 @@ GOOGLE_ADS_LOGIN_CUSTOMER_ID (defaults to the customer ID).
 """
 
 import logging
+from zoneinfo import ZoneInfo
 import os
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -17,7 +18,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 ADS_API_VERSION = "v23"
-AEST = timezone(timedelta(hours=10))
+AEST = ZoneInfo("Australia/Melbourne")  # Meta account time zone; handles daylight saving
 MAX_PER_PERSON = 25
 
 CLIENT_LABELS = {

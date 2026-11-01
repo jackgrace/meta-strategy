@@ -15,6 +15,7 @@ PAUSE ad IF:
 """
 
 import logging
+from zoneinfo import ZoneInfo
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
@@ -26,7 +27,7 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-AEST = timezone(timedelta(hours=10))
+AEST = ZoneInfo("Australia/Melbourne")  # Meta account time zone; handles daylight saving
 
 # Flip TESTING_KILL_ENABLED to True to re-enable the hourly 30d kill.
 TESTING_KILL_ENABLED = False
@@ -308,7 +309,7 @@ def build_testing_kill_message(actions: list[TestingKillAction], dry_run: bool) 
     if not actions:
         return None
 
-    now = datetime.now(AEST).strftime("%d %b %H:%M AEST")
+    now = datetime.now(AEST).strftime("%d %b %H:%M %Z")
     mode = "DRY RUN" if dry_run else "LIVE"
 
     paused = [a for a in actions if a.action in ("paused", "would_pause")]

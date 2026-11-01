@@ -25,6 +25,7 @@ Runs once per day (piggybacks the 1am AEST auto-pause slot).
 """
 
 import logging
+from zoneinfo import ZoneInfo
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
@@ -36,7 +37,7 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-AEST = timezone(timedelta(hours=10))
+AEST = ZoneInfo("Australia/Melbourne")  # Meta account time zone; handles daylight saving
 
 KILL_ROAS_3D = 2.0
 KILL_KEYWORD_SPEND_THRESHOLDS: dict[str, float] = {
@@ -328,7 +329,7 @@ def run_cbo_ad_kill_3d(config: Config, dry_run: bool = False) -> list[CboAdKillA
 def _build_slack_message(actions: list[CboAdKillAction], dry_run: bool) -> dict | None:
     if not actions:
         return None
-    now = datetime.now(AEST).strftime("%d %b %H:%M AEST")
+    now = datetime.now(AEST).strftime("%d %b %H:%M %Z")
     mode = "DRY RUN" if dry_run else "LIVE"
 
     killed = [a for a in actions if a.action in ("killed", "would_kill")]

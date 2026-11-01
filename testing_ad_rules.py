@@ -34,6 +34,7 @@ Skips ads / adsets with OFF or RUN in the name.
 """
 
 import logging
+from zoneinfo import ZoneInfo
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -47,7 +48,7 @@ from stop_loss import _is_scale_campaign, _update_ad_status
 
 logger = logging.getLogger(__name__)
 
-AEST = timezone(timedelta(hours=10))
+AEST = ZoneInfo("Australia/Melbourne")  # Meta account time zone; handles daylight saving
 
 TESTING_AD_RULES_ENABLED = True
 SCALE_AD_RULE_ENABLED = True
