@@ -4,6 +4,7 @@ Intra-day adset restart on ROAS. Runs every 15 minutes.
 Turn a PAUSED adset back ON during the day when:
 - its campaign is ACTIVE (delivering)
 - its name does not contain OFF
+- its campaign is not a TESTING campaign (paused testing adsets stay off)
 - today it has spent > $50 and its ROAS today is > 1.1
 
 (Every other paused adset in an active campaign comes back at the midnight
@@ -73,6 +74,8 @@ def run_adset_roas_restart(config: Config, dry_run: bool = False) -> list[AdsetR
     for aid, t in paused.items():
         if campaigns.get(t["campaign_id"], {}).get("effective_status") != "ACTIVE":
             continue
+        if "TESTING" in t["campaign_name"].upper():
+            continue  # paused TESTING adsets stay paused
         roas = t["revenue"] / t["spend"]
         name = info.get(aid, {}).get("name", t["name"])
         why = f"today ${t['spend']:.2f} at {roas:.2f}x > {RESTART_ROAS}"
