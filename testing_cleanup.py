@@ -6,7 +6,9 @@ more than 7 days ago, over the last 7 complete days (same as Ads Manager's
 "Last 7 days", today excluded):
 
   1. 7d spend > $175 & 7d ROAS < 1.0  -> pause + rename "<name> - OFF LOW ROAS"
-  2. 7d spend < $10                    -> pause + rename "<name> - OFF LOW SPEND"
+  2. 7d spend < $10, and the ad's adset spent >= $150 in those 7 days
+                                       -> pause + rename "<name> - OFF LOW SPEND"
+     (an ad in a small-budget adset is starved, not rejected — left alone)
 
 SCALE campaigns (SCALE as a word in the name, incl. SCALE | CBO) and every
 other campaign (ALL_LOW_SPEND_ENABLED) get rule 2 (LOW SPEND) only.
@@ -42,6 +44,7 @@ LOW_ROAS_ENABLED = False      # OFF LOW ROAS paused; OFF LOW SPEND still runs
 LOW_ROAS_SPEND = 175.0
 LOW_ROAS = 1.0
 LOW_SPEND = 10.0
+LOW_SPEND_MIN_ADSET_SPEND = 150.0   # adset must have had real budget to compete for
 ALL_LOW_ROAS_ENABLED = True   # any campaign, any ad age
 ALL_LOW_ROAS_SPEND = 150.0
 ALL_LOW_ROAS = 1.0
@@ -72,7 +75,7 @@ def _fetch_active_ads(config: Config) -> list[dict]:
     url = f"{API_BASE}/{config.meta_ad_account_id}/ads"
     params = {
         "access_token": config.meta_access_token,
-        "fields": "id,name,created_time,campaign{name},adset{name}",
+        "fields": "id,name,created_time,campaign{name},adset{id,name}",
         "limit": 500,
         "filtering": '[{"field":"effective_status","operator":"IN","value":["ACTIVE"]}]',
     }
@@ -92,6 +95,7 @@ def _fetch_active_ads(config: Config) -> list[dict]:
                 "name": row.get("name", "Unknown"),
                 "created_time": row.get("created_time", ""),
                 "campaign_name": campaign,
+                "adset_id": (row.get("adset") or {}).get("id", ""),
                 "adset_name": (row.get("adset") or {}).get("name", "Unknown"),
             })
         url = data.get("paging", {}).get("next")
@@ -111,6 +115,7 @@ def run_testing_cleanup(config: Config, dry_run: bool = False) -> list[CleanupAc
     yesterday = _today() - timedelta(days=1)
     rows = _fetch_daily(config, None, lambda _n: True, "all", yesterday - timedelta(days=6), yesterday)
     metrics = _aggregate(rows, "ad_id")
+    adset_metrics = _aggregate(rows, "adset_id")
 
     now = datetime.now(timezone.utc)
     actions: list[CleanupAction] = []
@@ -133,7 +138,10 @@ def run_testing_cleanup(config: Config, dry_run: bool = False) -> list[CleanupAc
         elif LOW_ROAS_ENABLED and ad["group"] == "testing" and spend > LOW_ROAS_SPEND and roas < LOW_ROAS:
             label, why = "LOW ROAS", f"7d spend ${spend:.2f} > ${LOW_ROAS_SPEND:.0f} & ROAS {roas:.2f} < {LOW_ROAS}"
         elif spend < LOW_SPEND:
-            label, why = "LOW SPEND", f"7d spend ${spend:.2f} < ${LOW_SPEND:.0f}"
+            adset_spend = adset_metrics.get(ad["adset_id"], {}).get("spend", 0.0)
+            if adset_spend < LOW_SPEND_MIN_ADSET_SPEND:
+                continue  # small-budget adset: the ad was starved, not rejected
+            label, why = "LOW SPEND", f"7d spend ${spend:.2f} < ${LOW_SPEND:.0f} (adset 7d ${adset_spend:.0f})"
         else:
             continue
 
@@ -162,7 +170,7 @@ def send_testing_cleanup_report(actions: list[CleanupAction], dry_run: bool, con
         {"type": "header", "text": {"type": "plain_text", "text": f"🧹 Ad clean-up — {len(actions)}"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": (
             f"*[{mode}]* Last 7 complete days. All campaigns: spend>${ALL_LOW_ROAS_SPEND:.0f} & ROAS<{ALL_LOW_ROAS} → OFF LOW ROAS │ "
-            f"{'All' if ALL_LOW_SPEND_ENABLED else 'TESTING + SCALE'} ads >{MIN_AD_AGE_DAYS} days old: spend<${LOW_SPEND:.0f} → OFF LOW SPEND. "
+            f"{'All' if ALL_LOW_SPEND_ENABLED else 'TESTING + SCALE'} ads >{MIN_AD_AGE_DAYS} days old: spend<${LOW_SPEND:.0f} in an adset that spent ≥${LOW_SPEND_MIN_ADSET_SPEND:.0f} → OFF LOW SPEND. "
             f"Remove OFF from the name to bring one back."
         )}]},
     ]
