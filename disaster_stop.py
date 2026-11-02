@@ -18,7 +18,7 @@ Otherwise, pause an ACTIVE ad for the rest of today if either:
 Restart:
   - same day, if neither check applies any more (late purchases / ATCs);
   - at 12:05am, any ad that hit a check yesterday is switched back on,
-    including TESTING ads (which the midnight restart otherwise leaves off).
+    except in TESTING campaigns (paused testing ads always stay off).
 
 Skips ads / adsets with OFF or RUN in the name.
 """
@@ -176,6 +176,8 @@ def run_disaster_midnight(config: Config, dry_run: bool = False) -> list[Disaste
     for ad_id in flagged:
         d = day_ads[ad_id]
         name, adset_name, ok = _names(info.get(ad_id, {}), d["meta"])
+        if "TESTING" in d["meta"].get("campaign_name", "").upper():
+            continue  # paused TESTING ads never come back on at midnight
         if ok and info.get(ad_id, {}).get("status") == "PAUSED":
             actions.append(_act(config, ad_id, d, name, adset_name, "ACTIVE", "activate",
                                 f"new day — paused yesterday ({flagged[ad_id]})", dry_run))

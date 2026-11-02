@@ -415,7 +415,8 @@ def run_ad_strikes(config: Config, dry_run: bool = False) -> list[TestingAdActio
             else:
                 actions.append(_action(ad_id, t, name, adset_name, "paused (rename failed)",
                                        f"{why} — OFF rename failed: {rerr}"))
-        elif status == "PAUSED":
+        elif status == "PAUSED" and "TESTING" not in t["meta"].get("campaign_name", "").upper():
+            # Paused TESTING ads never come back on at midnight.
             strikes = 1 + sum(1 for f in flagged_by_day[1:] if ad_id in f)
             actions.append(_set_status(config, ad_id, t, name, adset_name, "ACTIVE", "activate",
                                        f"strike {strikes}/{STRIKES_TO_RETIRE} yesterday — back on for a fresh day", dry_run))
