@@ -8,8 +8,8 @@ more than 7 days ago, over the last 7 complete days (same as Ads Manager's
   1. 7d spend > $175 & 7d ROAS < 1.0  -> pause + rename "<name> - OFF LOW ROAS"
   2. 7d spend < $10                    -> pause + rename "<name> - OFF LOW SPEND"
 
-SCALE campaigns (SCALE as a word in the name, incl. SCALE | CBO) get rule 2
-(LOW SPEND) only.
+SCALE campaigns (SCALE as a word in the name, incl. SCALE | CBO) and every
+other campaign (ALL_LOW_SPEND_ENABLED) get rule 2 (LOW SPEND) only.
 
 ALL campaigns, any ad age:
   3. 7d spend > $150 & 7d ROAS < 1.0  -> pause + rename "<name> - OFF LOW ROAS"
@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 TESTING_CLEANUP_ENABLED = True
 SCALE_LOW_SPEND_ENABLED = True
+ALL_LOW_SPEND_ENABLED = True  # LOW SPEND on every campaign, not just TESTING / SCALE
 MIN_AD_AGE_DAYS = 7
 LOW_ROAS_ENABLED = False      # OFF LOW ROAS paused; OFF LOW SPEND still runs
 LOW_ROAS_SPEND = 175.0
@@ -64,7 +65,7 @@ def _group(campaign_name: str) -> str | None:
         return "testing" if TESTING_CLEANUP_ENABLED else None
     if _is_scale_campaign(campaign_name):
         return "scale" if SCALE_LOW_SPEND_ENABLED else None
-    return None
+    return "other" if ALL_LOW_SPEND_ENABLED else None
 
 
 def _fetch_active_ads(config: Config) -> list[dict]:
@@ -99,7 +100,7 @@ def _fetch_active_ads(config: Config) -> list[dict]:
 
 
 def run_testing_cleanup(config: Config, dry_run: bool = False) -> list[CleanupAction]:
-    if not (TESTING_CLEANUP_ENABLED or SCALE_LOW_SPEND_ENABLED or ALL_LOW_ROAS_ENABLED):
+    if not (TESTING_CLEANUP_ENABLED or SCALE_LOW_SPEND_ENABLED or ALL_LOW_SPEND_ENABLED or ALL_LOW_ROAS_ENABLED):
         logger.info("Clean-up: DISABLED — skipping")
         return []
 
@@ -161,7 +162,7 @@ def send_testing_cleanup_report(actions: list[CleanupAction], dry_run: bool, con
         {"type": "header", "text": {"type": "plain_text", "text": f"🧹 Ad clean-up — {len(actions)}"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": (
             f"*[{mode}]* Last 7 complete days. All campaigns: spend>${ALL_LOW_ROAS_SPEND:.0f} & ROAS<{ALL_LOW_ROAS} → OFF LOW ROAS │ "
-            f"TESTING + SCALE ads >{MIN_AD_AGE_DAYS} days old: spend<${LOW_SPEND:.0f} → OFF LOW SPEND. "
+            f"{'All' if ALL_LOW_SPEND_ENABLED else 'TESTING + SCALE'} ads >{MIN_AD_AGE_DAYS} days old: spend<${LOW_SPEND:.0f} → OFF LOW SPEND. "
             f"Remove OFF from the name to bring one back."
         )}]},
     ]
