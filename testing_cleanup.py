@@ -45,7 +45,7 @@ LOW_ROAS_SPEND = 175.0
 LOW_ROAS = 1.0
 LOW_SPEND = 10.0
 LOW_SPEND_MIN_ADSET_SPEND = 150.0   # adset must have had real budget to compete for
-ALL_LOW_ROAS_ENABLED = True   # any campaign, any ad age
+ALL_LOW_ROAS_ENABLED = False  # paused for now — OFF LOW SPEND still runs
 ALL_LOW_ROAS_SPEND = 150.0
 ALL_LOW_ROAS = 1.0
 
@@ -169,7 +169,9 @@ def send_testing_cleanup_report(actions: list[CleanupAction], dry_run: bool, con
     blocks = [
         {"type": "header", "text": {"type": "plain_text", "text": f"🧹 Ad clean-up — {len(actions)}"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": (
-            f"*[{mode}]* Last 7 complete days. All campaigns: spend>${ALL_LOW_ROAS_SPEND:.0f} & ROAS<{ALL_LOW_ROAS} → OFF LOW ROAS │ "
+            f"*[{mode}]* Last 7 complete days. "
+            + (f"All campaigns: spend>${ALL_LOW_ROAS_SPEND:.0f} & ROAS<{ALL_LOW_ROAS} → OFF LOW ROAS │ " if ALL_LOW_ROAS_ENABLED else "")
+            + 
             f"{'All' if ALL_LOW_SPEND_ENABLED else 'TESTING + SCALE'} ads >{MIN_AD_AGE_DAYS} days old: spend<${LOW_SPEND:.0f} in an adset that spent ≥${LOW_SPEND_MIN_ADSET_SPEND:.0f} → OFF LOW SPEND. "
             f"Remove OFF from the name to bring one back."
         )}]},
