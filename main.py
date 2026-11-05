@@ -46,6 +46,7 @@ from testing_ad_rules import (
 from disaster_stop import run_disaster_stop as _run_disaster_stop, run_disaster_midnight as _run_disaster_midnight, send_disaster_report
 from testing_cleanup import run_testing_cleanup as _run_testing_cleanup, send_testing_cleanup_report
 from cap_report import build_cap_report, send_cap_report
+from catalog_inventory import build_catalog_inventory, summarise as _catalog_summarise, to_csv as _catalog_csv, send_catalog_summary
 from adset_roas_restart import run_adset_roas_restart as _run_adset_roas_restart, send_adset_roas_restart_report
 from slack_reporter import send_testing_missed_opps, send_early_fatigue_report
 
@@ -345,6 +346,20 @@ def run_adset_roas_restart() -> dict:
         per_account.append({"account": config.meta_ad_account_id,
                             "activated": sum(1 for a in actions if a.action in ("activated", "would_activate"))})
     return {"status": "ok", "mode": "DRY RUN" if dry_run else "LIVE", "per_account": per_account}
+
+
+def run_catalog_inventory(slack: bool = True) -> dict:
+    """Read only: which active ads use the catalog, and which hold their own media."""
+    per_account = []
+    for config in _per_account_configs():
+        rows = build_catalog_inventory(config)
+        summary = _catalog_summarise(rows)
+        if slack:
+            send_catalog_summary(summary, config.meta_ad_account_id, config)
+        per_account.append({"account": config.meta_ad_account_id, "summary": summary,
+                            "ads": [r.__dict__ for r in rows if r.catalog_signal],
+                            "csv": _catalog_csv(rows)})
+    return {"status": "ok", "mode": "READ ONLY", "per_account": per_account}
 
 
 def run_midnight_restart_preview() -> dict:

@@ -40,6 +40,7 @@ from main import (
     run_cap_report,
     run_adset_roas_restart,
     run_midnight_restart_preview,
+    run_catalog_inventory,
 )
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,18 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._run_testing_cleanup_endpoint(source="http")
         elif self.path == "/cap-report":
             self._run_cap_report_endpoint(source="http")
+        elif self.path.startswith("/catalog-ads"):
+            try:
+                result = run_catalog_inventory(slack="format=csv" not in self.path)
+                if "format=csv" in self.path:
+                    self._respond_text(200, "\n".join(a["csv"] for a in result["per_account"]))
+                else:
+                    for a in result["per_account"]:
+                        a.pop("csv", None)
+                    self._respond(200, result)
+            except Exception as e:
+                logger.error(f"Catalog inventory failed: {e}")
+                self._respond(500, {"status": "error", "message": str(e)})
         elif self.path == "/midnight-restart-preview":
             try:
                 self._respond(200, run_midnight_restart_preview())
