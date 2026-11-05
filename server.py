@@ -42,6 +42,7 @@ from main import (
     run_midnight_restart_preview,
     run_catalog_inventory,
     run_creative_dump,
+    run_catalog_off,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,18 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._run_testing_cleanup_endpoint(source="http")
         elif self.path == "/cap-report":
             self._run_cap_report_endpoint(source="http")
+        elif self.path.startswith("/catalog-off"):
+            q = parse_qs(urlparse(self.path).query)
+            ad_ids = [a.strip() for a in q.get("ads", [""])[0].split(",") if a.strip().isdigit()]
+            live = q.get("live", ["0"])[0] in ("1", "true", "yes")
+            try:
+                limit = max(1, min(int(q.get("limit", ["5"])[0]), 50))
+                self._respond(200, run_catalog_off(ad_ids or None, limit, live))
+            except ValueError as e:
+                self._respond(400, {"status": "error", "message": str(e)})
+            except Exception as e:
+                logger.error(f"Catalog off failed: {e}")
+                self._respond(500, {"status": "error", "message": str(e)})
         elif self.path.startswith("/creative-dump"):
             ad_id = parse_qs(urlparse(self.path).query).get("ad", [""])[0].strip()
             if not ad_id.isdigit():
