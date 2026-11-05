@@ -13,9 +13,12 @@ more than 7 days ago, over the last 7 complete days (same as Ads Manager's
 SCALE campaigns (SCALE as a word in the name, incl. SCALE | CBO) and every
 other campaign (ALL_LOW_SPEND_ENABLED) get rule 2 (LOW SPEND) only.
 
-ALL campaigns, any ad age:
-  3. 7d spend > $150 & 7d ROAS < 1.0  -> pause + rename "<name> - OFF LOW ROAS"
-     (OFF is needed or the midnight restart switches it straight back on)
+ALL campaigns, ad older than 7 days:
+  3. 7d spend > $150 & 7d ROAS < 1.0 & cost/ATC > 1.25x the other ads in its
+     adset over the same 7 days  -> pause + rename "<name> - OFF LOW ROAS"
+     (0 ATCs counts as infinitely expensive; if the other ads have no ATCs
+      there is nothing to compare against and the ad is left alone.
+      OFF is needed or the midnight restart switches it straight back on)
 
 Ads with no delivery in the window count as $0 spend. Skips ads / adsets
 with OFF or RUN in the name. OFF keeps them off at midnight.
@@ -45,9 +48,10 @@ LOW_ROAS_SPEND = 175.0
 LOW_ROAS = 1.0
 LOW_SPEND = 10.0
 LOW_SPEND_MIN_ADSET_SPEND = 150.0   # adset must have had real budget to compete for
-ALL_LOW_ROAS_ENABLED = False  # paused for now — OFF LOW SPEND still runs
+ALL_LOW_ROAS_ENABLED = True   # any campaign, ad > 7 days old
 ALL_LOW_ROAS_SPEND = 150.0
 ALL_LOW_ROAS = 1.0
+ALL_LOW_ROAS_ATC_MULT = 1.25  # and cost/ATC > 1.25x the other ads in its adset (7d)
 
 
 @dataclass
@@ -69,6 +73,21 @@ def _group(campaign_name: str) -> str | None:
     if _is_scale_campaign(campaign_name):
         return "scale" if SCALE_LOW_SPEND_ENABLED else None
     return "other" if ALL_LOW_SPEND_ENABLED else None
+
+
+def _peer_cpa(ad: dict, adset: dict) -> float:
+    """Cost per ATC of the other ads in the adset (the ad itself left out). 0 = no data."""
+    peer_atcs = adset.get("atcs", 0) - ad.get("atcs", 0)
+    peer_spend = adset.get("spend", 0.0) - ad.get("spend", 0.0)
+    return peer_spend / peer_atcs if peer_atcs > 0 and peer_spend > 0 else 0.0
+
+
+def _atc_too_expensive(ad: dict, adset: dict) -> bool:
+    peer = _peer_cpa(ad, adset)
+    if peer <= 0:
+        return False   # nothing to compare against
+    cpa = ad["spend"] / ad["atcs"] if ad.get("atcs") else float("inf")
+    return cpa > ALL_LOW_ROAS_ATC_MULT * peer
 
 
 def _fetch_active_ads(config: Config) -> list[dict]:
@@ -131,8 +150,11 @@ def run_testing_cleanup(config: Config, dry_run: bool = False) -> list[CleanupAc
         except ValueError:
             old_enough = False
 
-        if ALL_LOW_ROAS_ENABLED and spend > ALL_LOW_ROAS_SPEND and roas < ALL_LOW_ROAS:
-            label, why = "LOW ROAS", f"7d spend ${spend:.2f} > ${ALL_LOW_ROAS_SPEND:.0f} & ROAS {roas:.2f} < {ALL_LOW_ROAS}"
+        if ALL_LOW_ROAS_ENABLED and old_enough and spend > ALL_LOW_ROAS_SPEND and roas < ALL_LOW_ROAS \
+                and _atc_too_expensive(m, adset_metrics.get(ad["adset_id"], {})):
+            cpa_txt = f"${spend / m['atcs']:.2f}/ATC" if m.get("atcs") else "0 ATCs"
+            label, why = "LOW ROAS", (f"7d spend ${spend:.2f} > ${ALL_LOW_ROAS_SPEND:.0f} & ROAS {roas:.2f} < {ALL_LOW_ROAS} "
+                                      f"& {cpa_txt} > {ALL_LOW_ROAS_ATC_MULT:g}x adset peers ${_peer_cpa(m, adset_metrics.get(ad['adset_id'], {})):.2f}")
         elif not old_enough or not ad["group"]:
             continue
         elif LOW_ROAS_ENABLED and ad["group"] == "testing" and spend > LOW_ROAS_SPEND and roas < LOW_ROAS:
@@ -170,7 +192,8 @@ def send_testing_cleanup_report(actions: list[CleanupAction], dry_run: bool, con
         {"type": "header", "text": {"type": "plain_text", "text": f"🧹 Ad clean-up — {len(actions)}"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": (
             f"*[{mode}]* Last 7 complete days. "
-            + (f"All campaigns: spend>${ALL_LOW_ROAS_SPEND:.0f} & ROAS<{ALL_LOW_ROAS} → OFF LOW ROAS │ " if ALL_LOW_ROAS_ENABLED else "")
+            + (f"All campaigns, ads >{MIN_AD_AGE_DAYS} days old: spend>${ALL_LOW_ROAS_SPEND:.0f} & ROAS<{ALL_LOW_ROAS} "
+               f"& cost/ATC >{ALL_LOW_ROAS_ATC_MULT:g}x adset peers → OFF LOW ROAS │ " if ALL_LOW_ROAS_ENABLED else "")
             + 
             f"{'All' if ALL_LOW_SPEND_ENABLED else 'TESTING + SCALE'} ads >{MIN_AD_AGE_DAYS} days old: spend<${LOW_SPEND:.0f} in an adset that spent ≥${LOW_SPEND_MIN_ADSET_SPEND:.0f} → OFF LOW SPEND. "
             f"Remove OFF from the name to bring one back."
