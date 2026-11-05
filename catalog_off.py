@@ -81,6 +81,18 @@ def _post(config: Config, path: str, payload: dict) -> tuple[bool, dict | str]:
     return False, err
 
 
+def _create_creative(config: Config, spec: dict) -> tuple[bool, dict | str, str]:
+    """Create the creative; if Meta rejects the promo-code metadata, retry without it."""
+    ok, out = _post(config, f"{config.meta_ad_account_id}/adcreatives", spec)
+    if not ok and "asset_feed_spec" in spec:
+        ok2, out2 = _post(config, f"{config.meta_ad_account_id}/adcreatives",
+                          {k: v for k, v in spec.items() if k != "asset_feed_spec"})
+        if ok2:
+            spec.pop("asset_feed_spec", None)
+            return True, out2, " (promo-code metadata dropped — check the promo code still shows)"
+    return ok, out, ""
+
+
 def _fetch_ad(config: Config, ad_id: str) -> dict:
     return _http_get_json(config, f"{API_BASE}/{ad_id}", {
         "access_token": config.meta_access_token,
@@ -88,12 +100,20 @@ def _fetch_ad(config: Config, ad_id: str) -> dict:
     })
 
 
-def build_new_creative(creative: dict) -> dict:
-    """Copy of the creative with product_extensions switched off."""
+def build_new_creative(creative: dict, reuse_post: bool = True) -> dict:
+    """Copy of the creative with product_extensions switched off.
+
+    reuse_post: point the new creative at the ad's existing post (its own
+    object_story_id, or the effective one Meta made for a spec-built ad) so
+    likes and comments carry over. False rebuilds from the spec (new post).
+    """
     new = {k: copy.deepcopy(creative[k]) for k in COPY_FIELDS if creative.get(k) not in (None, "", {}, [])}
-    # A post-based creative carries the post; don't also send the spec Meta derived from it.
-    if new.get("object_story_id") and "object_story_spec" in new:
-        del new["object_story_spec"]
+    post_id = creative.get("object_story_id") or (creative.get("effective_object_story_id") if reuse_post else None)
+    if post_id:
+        new["object_story_id"] = post_id
+        new.pop("object_story_spec", None)   # the post already carries it
+    else:
+        new.pop("object_story_id", None)
     dof = new.setdefault("degrees_of_freedom_spec", {})
     cfs = dof.setdefault("creative_features_spec", {})
     pe = cfs.setdefault("product_extensions", {})
@@ -132,23 +152,27 @@ def run_catalog_off(config: Config, ad_ids: list[str] | None = None, limit: int 
         if _is_off(creative):
             results.append(make("skipped", "Add catalog items is already off"))
             continue
-        if not (creative.get("object_story_id") or creative.get("object_story_spec")):
+        if not (creative.get("object_story_id") or creative.get("effective_object_story_id")
+                or creative.get("object_story_spec")):
             results.append(make("skipped", "creative has no post or story spec to copy — needs a manual look"))
             continue
         spec = build_new_creative(creative)
+        post_kept = bool(spec.get("object_story_id"))
         if not live:
-            results.append(make("would_change", "new creative with product_extensions OPT_OUT, same post", "", spec))
+            results.append(make("would_change", "product_extensions OPT_OUT; "
+                                + ("same post (likes/comments kept)" if post_kept else "rebuilt from spec (NEW post)"),
+                                "", spec))
             continue
 
-        ok, out = _post(config, f"{config.meta_ad_account_id}/adcreatives", spec)
-        if not ok and "asset_feed_spec" in spec:
-            # Promo-code metadata may not be accepted alongside a post id; retry without it.
-            spec2 = {k: v for k, v in spec.items() if k != "asset_feed_spec"}
-            ok, out = _post(config, f"{config.meta_ad_account_id}/adcreatives", spec2)
-            if ok:
-                spec = spec2
+        ok, out, note = _create_creative(config, spec)
+        if not ok and post_kept and creative.get("object_story_spec") and not creative.get("object_story_id"):
+            # Meta wouldn't accept the effective post id; fall back to the spec (new post).
+            spec = build_new_creative(creative, reuse_post=False)
+            post_kept = False
+            ok, out, note2 = _create_creative(config, spec)
+            note += " — post could not be reused, rebuilt from spec (NEW post, social proof not carried)" + note2
         if not ok:
-            results.append(make("failed", f"creating creative: {out}", "", spec))
+            results.append(make("failed", f"creating creative: {out}{note}", "", spec))
             continue
         new_id = str(out.get("id", ""))
         ok, out = _post(config, ad_id, {"creative": {"creative_id": new_id}})
@@ -158,7 +182,7 @@ def run_catalog_off(config: Config, ad_ids: list[str] | None = None, limit: int 
         after = (_fetch_ad(config, ad_id).get("creative") or {})
         verified = str(after.get("id")) == new_id and _is_off(after)
         results.append(make("changed" if verified else "failed",
-                            "verified: catalog items off" if verified else
+                            ("verified: catalog items off, " + ("same post" if post_kept else "NEW post") + note) if verified else
                             f"ad switched but re-read shows creative {after.get('id')} / signal {_catalog_signal(after)!r}",
                             new_id, spec))
         logger.info(f"Catalog off: {results[-1].action} {ad_id} ({name}) {old_id} -> {new_id}")
