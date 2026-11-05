@@ -7,8 +7,10 @@ image or video that a rebuilt, catalog-free creative could keep?
 
 Catalog signals on the creative:
   - degrees_of_freedom_spec.creative_features_spec.product_extensions
-    enroll_status OPT_IN                -> the "products" / Advantage+ catalog
-                                           toggle in Ad Setup (the usual case)
+    enroll_status OPT_IN                -> Advantage+ "Add catalog items"
+  - creative_sourcing_spec.associated_product_set_id
+                                        -> Ad sources > Products (the product
+                                           set attached to the ad)
   - product_set_id                      -> dynamic product ad
   - object_story_spec.template_data     -> catalog template creative
 (promotional_metadata.product_catalog_id is the promo-code feature, not the
@@ -36,7 +38,7 @@ from testing_ad_rules import _aggregate, _fetch_daily, _today
 logger = logging.getLogger(__name__)
 
 CREATIVE_FIELDS = ("id,name,product_set_id,object_story_spec,asset_feed_spec,"
-                   "object_story_id,image_hash,video_id,object_type,degrees_of_freedom_spec")
+                   "object_story_id,image_hash,video_id,object_type,degrees_of_freedom_spec,creative_sourcing_spec")
 
 
 @dataclass
@@ -90,6 +92,8 @@ def _catalog_signal(creative: dict) -> str:
           .get("product_browsing") or {})
     if pb.get("enroll_status") == "OPT_IN":
         return "product_browsing"
+    if (creative.get("creative_sourcing_spec") or {}).get("associated_product_set_id"):
+        return "product_set_source"   # Ad sources > Products
     if creative.get("product_set_id"):
         return "product_set_id"
     oss = creative.get("object_story_spec") or {}

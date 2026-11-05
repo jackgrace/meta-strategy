@@ -50,7 +50,7 @@ MIN_SPEND_FOR_AUTO_PICK = 1.0    # auto-picked test ads should at least be deliv
 COPY_FIELDS = ("name", "object_story_id", "object_story_spec", "asset_feed_spec", "url_tags",
                "instagram_user_id", "instagram_actor_id", "degrees_of_freedom_spec",
                "contextual_multi_ads", "platform_customizations")
-FETCH_FIELDS = CREATIVE_FIELDS + ",url_tags,instagram_user_id,instagram_actor_id,contextual_multi_ads,platform_customizations,effective_object_story_id"
+FETCH_FIELDS = CREATIVE_FIELDS + ",url_tags,instagram_user_id,instagram_actor_id,contextual_multi_ads,platform_customizations,effective_object_story_id"  # CREATIVE_FIELDS already includes creative_sourcing_spec
 
 
 @dataclass
@@ -132,6 +132,11 @@ def build_new_creative(creative: dict, reuse_post: bool = True) -> dict:
         for cust in (f.get("customizations") or {}).values():
             if isinstance(cust, dict) and "enroll_status" in cust:
                 cust["enroll_status"] = "OPT_OUT"
+    # Ad sources > Products: keep the rest of the sourcing spec, drop the product set.
+    css = {k: v for k, v in (creative.get("creative_sourcing_spec") or {}).items()
+           if k != "associated_product_set_id"}
+    if css:
+        new["creative_sourcing_spec"] = css
     bundle = cfs.pop("standard_enhancements", None)
     if (bundle or {}).get("enroll_status") == "OPT_OUT":
         for feature in STANDARD_BUNDLE:
@@ -142,7 +147,10 @@ def build_new_creative(creative: dict, reuse_post: bool = True) -> dict:
 
 def _features_on(creative: dict) -> list[str]:
     cfs = ((creative.get("degrees_of_freedom_spec") or {}).get("creative_features_spec") or {})
-    return [f for f in FEATURES_OFF if (cfs.get(f) or {}).get("enroll_status") == "OPT_IN"]
+    on = [f for f in FEATURES_OFF if (cfs.get(f) or {}).get("enroll_status") == "OPT_IN"]
+    if (creative.get("creative_sourcing_spec") or {}).get("associated_product_set_id"):
+        on.append("product_set_source")
+    return on
 
 
 def _is_off(creative: dict) -> bool:
