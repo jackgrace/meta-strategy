@@ -6,9 +6,13 @@ For every ACTIVE ad: is its creative tied to the product catalog
 image or video that a rebuilt, catalog-free creative could keep?
 
 Catalog signals on the creative:
+  - degrees_of_freedom_spec.creative_features_spec.product_extensions
+    enroll_status OPT_IN                -> the "products" / Advantage+ catalog
+                                           toggle in Ad Setup (the usual case)
   - product_set_id                      -> dynamic product ad
   - object_story_spec.template_data     -> catalog template creative
-  - asset_feed_spec mentions a product set / catalog
+(promotional_metadata.product_catalog_id is the promo-code feature, not the
+toggle, and is ignored.)
 Also flags adsets whose promoted_object points at a catalog or product set.
 
 Endpoint: GET /catalog-ads (JSON) or /catalog-ads?format=csv
@@ -32,7 +36,7 @@ from testing_ad_rules import _aggregate, _fetch_daily, _today
 logger = logging.getLogger(__name__)
 
 CREATIVE_FIELDS = ("id,name,product_set_id,object_story_spec,asset_feed_spec,"
-                   "object_story_id,image_hash,video_id,object_type")
+                   "object_story_id,image_hash,video_id,object_type,degrees_of_freedom_spec")
 
 
 @dataclass
@@ -78,16 +82,15 @@ def _own_media(creative: dict) -> tuple[list[str], list[str]]:
 
 
 def _catalog_signal(creative: dict) -> str:
+    pe = (((creative.get("degrees_of_freedom_spec") or {}).get("creative_features_spec") or {})
+          .get("product_extensions") or {})
+    if pe.get("enroll_status") == "OPT_IN":
+        return "product_extensions"
     if creative.get("product_set_id"):
         return "product_set_id"
     oss = creative.get("object_story_spec") or {}
     if oss.get("template_data"):
         return "template_data"
-    afs = creative.get("asset_feed_spec") or {}
-    if afs:
-        blob = json.dumps(afs).lower()
-        if "product_set" in blob or "catalog" in blob:
-            return "asset_feed_spec"
     return ""
 
 
@@ -221,7 +224,7 @@ def dump_creative(config: Config, ad_id: str) -> dict:
     """Read only: one ad's full creative plus the paths that look catalog-related."""
     data = _http_get_json(config, f"{API_BASE}/{ad_id}", {
         "access_token": config.meta_access_token,
-        "fields": f"id,name,creative{{{CREATIVE_FIELDS},degrees_of_freedom_spec,template_url_spec,url_tags}}",
+        "fields": f"id,name,creative{{{CREATIVE_FIELDS},template_url_spec,url_tags}}",
     })
     creative = data.get("creative") or {}
     return {
