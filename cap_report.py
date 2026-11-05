@@ -32,6 +32,7 @@ from testing_ad_rules import _today
 
 logger = logging.getLogger(__name__)
 
+CAP_REPORT_ENABLED = False     # daily cap guidance switched off
 RAISE_ROAS = 1.2
 LOWER_ROAS = 1.0
 MIN_PURCHASES_7D = 5

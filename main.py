@@ -321,6 +321,10 @@ def run_testing_cleanup() -> dict:
 
 def run_cap_report() -> dict:
     """1am: cost/bid cap guidance per adset (report only)."""
+    from cap_report import CAP_REPORT_ENABLED
+    if not CAP_REPORT_ENABLED:
+        logger.info("Cap report: DISABLED — skipping")
+        return {"status": "ok", "mode": "DISABLED", "per_account": []}
     per_account = []
     for config in _per_account_configs():
         logger.info(f"--- Cap report: account {config.meta_ad_account_id} ---")
