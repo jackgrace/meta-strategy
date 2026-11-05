@@ -107,12 +107,14 @@ class TriggerHandler(BaseHTTPRequestHandler):
                 logger.error(f"Catalog off failed: {e}")
                 self._respond(500, {"status": "error", "message": str(e)})
         elif self.path.startswith("/creative-dump"):
-            ad_id = parse_qs(urlparse(self.path).query).get("ad", [""])[0].strip()
-            if not ad_id.isdigit():
-                self._respond(400, {"status": "error", "message": "use /creative-dump?ad=<ad id>"})
+            q = parse_qs(urlparse(self.path).query)
+            ad_id = q.get("ad", [""])[0].strip()
+            creative_id = q.get("creative", [""])[0].strip()
+            if not (ad_id.isdigit() or creative_id.isdigit()):
+                self._respond(400, {"status": "error", "message": "use /creative-dump?ad=<ad id> or ?creative=<creative id>"})
             else:
                 try:
-                    self._respond(200, run_creative_dump(ad_id))
+                    self._respond(200, run_creative_dump(ad_id, creative_id or None))
                 except Exception as e:
                     logger.error(f"Creative dump failed: {e}")
                     self._respond(500, {"status": "error", "message": str(e)})

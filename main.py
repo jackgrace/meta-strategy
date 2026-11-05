@@ -376,9 +376,9 @@ def run_catalog_off(ad_ids: list[str] | None, limit: int, live: bool) -> dict:
     }
 
 
-def run_creative_dump(ad_id: str) -> dict:
-    """Read only: show one ad's creative and what looks catalog-related in it."""
-    return _dump_creative(_per_account_configs()[0], ad_id)
+def run_creative_dump(ad_id: str, creative_id: str | None = None) -> dict:
+    """Read only: show one ad's (or creative's) full creative and what looks catalog-related."""
+    return _dump_creative(_per_account_configs()[0], ad_id, creative_id)
 
 
 def run_midnight_restart_preview() -> dict:

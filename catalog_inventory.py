@@ -224,13 +224,25 @@ def _find_matches(obj, path="", out=None) -> list[str]:
     return out
 
 
-def dump_creative(config: Config, ad_id: str) -> dict:
-    """Read only: one ad's full creative plus the paths that look catalog-related."""
-    data = _http_get_json(config, f"{API_BASE}/{ad_id}", {
-        "access_token": config.meta_access_token,
-        "fields": f"id,name,creative{{{CREATIVE_FIELDS},template_url_spec,url_tags}}",
-    })
-    creative = data.get("creative") or {}
+DUMP_EXTRA = ("template_url_spec,url_tags,creative_sourcing_spec,product_data,recommender_settings,"
+              "dynamic_ad_voice,effective_object_story_id,instagram_user_id,contextual_multi_ads,"
+              "platform_customizations,status")
+
+
+def dump_creative(config: Config, ad_id: str, creative_id: str | None = None) -> dict:
+    """Read only: one ad's (or one creative's) full creative plus catalog-looking paths."""
+    if creative_id:
+        creative = _http_get_json(config, f"{API_BASE}/{creative_id}", {
+            "access_token": config.meta_access_token,
+            "fields": f"{CREATIVE_FIELDS},{DUMP_EXTRA}",
+        })
+        data = {"id": None, "name": f"(creative {creative_id})"}
+    else:
+        data = _http_get_json(config, f"{API_BASE}/{ad_id}", {
+            "access_token": config.meta_access_token,
+            "fields": f"id,name,creative{{{CREATIVE_FIELDS},{DUMP_EXTRA}}}",
+        })
+        creative = data.get("creative") or {}
     return {
         "ad_id": data.get("id"),
         "ad_name": data.get("name"),
