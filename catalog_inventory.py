@@ -86,6 +86,10 @@ def _catalog_signal(creative: dict) -> str:
           .get("product_extensions") or {})
     if pe.get("enroll_status") == "OPT_IN":
         return "product_extensions"
+    pb = (((creative.get("degrees_of_freedom_spec") or {}).get("creative_features_spec") or {})
+          .get("product_browsing") or {})
+    if pb.get("enroll_status") == "OPT_IN":
+        return "product_browsing"
     if creative.get("product_set_id"):
         return "product_set_id"
     oss = creative.get("object_story_spec") or {}

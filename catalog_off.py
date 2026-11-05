@@ -1,10 +1,11 @@
 """
-Switch off "Add catalog items" (Advantage+ creative product_extensions) on
-chosen ads.
+Switch off "Add catalog items" (Advantage+ creative product_extensions) and
+catalog browsing (product_browsing) on chosen ads.
 
 Creatives can't be edited, so for each ad:
   1. read its creative
-  2. create a copy with product_extensions (and its carousel option) OPT_OUT —
+  2. create a copy with product_extensions (and its carousel option) and
+     product_browsing OPT_OUT —
      same post / media / text / url tags / other enhancements
   3. point the ad at the new creative (ad id, stats and the post's likes and
      comments stay)
@@ -34,6 +35,8 @@ from midnight_restart import _http_get_json
 logger = logging.getLogger(__name__)
 
 MAX_LIVE = 10
+# Advantage+ creative features switched off on the new creative.
+FEATURES_OFF = ("product_extensions", "product_browsing")
 MIN_SPEND_FOR_AUTO_PICK = 1.0    # auto-picked test ads should at least be delivering
 
 # Fields copied from the old creative onto the new one when present.
@@ -116,17 +119,23 @@ def build_new_creative(creative: dict, reuse_post: bool = True) -> dict:
         new.pop("object_story_id", None)
     dof = new.setdefault("degrees_of_freedom_spec", {})
     cfs = dof.setdefault("creative_features_spec", {})
-    pe = cfs.setdefault("product_extensions", {})
-    pe["enroll_status"] = "OPT_OUT"
-    for cust in (pe.get("customizations") or {}).values():
-        if isinstance(cust, dict) and "enroll_status" in cust:
-            cust["enroll_status"] = "OPT_OUT"
+    for feature in FEATURES_OFF:
+        f = cfs.setdefault(feature, {})
+        f["enroll_status"] = "OPT_OUT"
+        for cust in (f.get("customizations") or {}).values():
+            if isinstance(cust, dict) and "enroll_status" in cust:
+                cust["enroll_status"] = "OPT_OUT"
     new["name"] = (creative.get("name") or "creative")[:180] + " [no catalog items]"
     return new
 
 
+def _features_on(creative: dict) -> list[str]:
+    cfs = ((creative.get("degrees_of_freedom_spec") or {}).get("creative_features_spec") or {})
+    return [f for f in FEATURES_OFF if (cfs.get(f) or {}).get("enroll_status") == "OPT_IN"]
+
+
 def _is_off(creative: dict) -> bool:
-    return _catalog_signal(creative) != "product_extensions"
+    return not _features_on(creative)
 
 
 def run_catalog_off(config: Config, ad_ids: list[str] | None = None, limit: int = 5,
@@ -150,8 +159,9 @@ def run_catalog_off(config: Config, ad_ids: list[str] | None = None, limit: int 
             ad_id, name, campaign, old_id, new_id, action, reason, spec or {})
 
         if _is_off(creative):
-            results.append(make("skipped", "Add catalog items is already off"))
+            results.append(make("skipped", "catalog items and catalog browsing already off"))
             continue
+        turning_off = ", ".join(_features_on(creative))
         if not (creative.get("object_story_id") or creative.get("effective_object_story_id")
                 or creative.get("object_story_spec")):
             results.append(make("skipped", "creative has no post or story spec to copy — needs a manual look"))
@@ -159,7 +169,7 @@ def run_catalog_off(config: Config, ad_ids: list[str] | None = None, limit: int 
         spec = build_new_creative(creative)
         post_kept = bool(spec.get("object_story_id"))
         if not live:
-            results.append(make("would_change", "product_extensions OPT_OUT; "
+            results.append(make("would_change", f"{turning_off} -> OPT_OUT; "
                                 + ("same post (likes/comments kept)" if post_kept else "rebuilt from spec (NEW post)"),
                                 "", spec))
             continue
@@ -182,8 +192,8 @@ def run_catalog_off(config: Config, ad_ids: list[str] | None = None, limit: int 
         after = (_fetch_ad(config, ad_id).get("creative") or {})
         verified = str(after.get("id")) == new_id and _is_off(after)
         results.append(make("changed" if verified else "failed",
-                            ("verified: catalog items off, " + ("same post" if post_kept else "NEW post") + note) if verified else
-                            f"ad switched but re-read shows creative {after.get('id')} / signal {_catalog_signal(after)!r}",
+                            (f"verified: {turning_off} off, " + ("same post" if post_kept else "NEW post") + note) if verified else
+                            f"ad switched but re-read shows creative {after.get('id')} with {_features_on(after)} still on",
                             new_id, spec))
         logger.info(f"Catalog off: {results[-1].action} {ad_id} ({name}) {old_id} -> {new_id}")
     return results
@@ -196,7 +206,7 @@ def send_catalog_off_report(results: list[CatalogOffResult], live: bool, config:
     blocks = [
         {"type": "header", "text": {"type": "plain_text", "text": f"🏷️ Catalog items off — {len(results)} ads"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text":
-            "Rebuilt each ad's creative with Advantage+ *Add catalog items* switched off, same post and media."}]},
+            "Rebuilt each ad's creative with Advantage+ *Add catalog items* and *catalog browsing* switched off, same post and media."}]},
         {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}},
     ]
     try:
