@@ -37,6 +37,13 @@ logger = logging.getLogger(__name__)
 MAX_LIVE = 10
 # Advantage+ creative features switched off on the new creative.
 FEATURES_OFF = ("product_extensions", "product_browsing")
+# Meta retired the single "standard_enhancements" switch; new creatives must
+# set each enhancement on its own. When the old creative had the bundle OFF,
+# these are written as OFF individually so nothing quietly turns on.
+STANDARD_BUNDLE = ("image_brightness_and_contrast", "image_templates", "image_touchups",
+                   "text_optimizations", "enhance_cta", "inline_comment", "image_animation",
+                   "cv_transformation", "carousel_to_video", "image_text_translation",
+                   "site_extensions", "show_destination_blurbs")
 MIN_SPEND_FOR_AUTO_PICK = 1.0    # auto-picked test ads should at least be delivering
 
 # Fields copied from the old creative onto the new one when present.
@@ -125,6 +132,10 @@ def build_new_creative(creative: dict, reuse_post: bool = True) -> dict:
         for cust in (f.get("customizations") or {}).values():
             if isinstance(cust, dict) and "enroll_status" in cust:
                 cust["enroll_status"] = "OPT_OUT"
+    bundle = cfs.pop("standard_enhancements", None)
+    if (bundle or {}).get("enroll_status") == "OPT_OUT":
+        for feature in STANDARD_BUNDLE:
+            cfs.setdefault(feature, {"enroll_status": "OPT_OUT"})
     new["name"] = (creative.get("name") or "creative")[:180] + " [no catalog items]"
     return new
 
@@ -136,6 +147,11 @@ def _features_on(creative: dict) -> list[str]:
 
 def _is_off(creative: dict) -> bool:
     return not _features_on(creative)
+
+
+def _opted_in(creative: dict) -> set[str]:
+    cfs = ((creative.get("degrees_of_freedom_spec") or {}).get("creative_features_spec") or {})
+    return {k for k, v in cfs.items() if isinstance(v, dict) and v.get("enroll_status") == "OPT_IN"}
 
 
 def run_catalog_off(config: Config, ad_ids: list[str] | None = None, limit: int = 5,
@@ -175,7 +191,8 @@ def run_catalog_off(config: Config, ad_ids: list[str] | None = None, limit: int 
             continue
 
         ok, out, note = _create_creative(config, spec)
-        if not ok and post_kept and creative.get("object_story_spec") and not creative.get("object_story_id"):
+        if (not ok and post_kept and creative.get("object_story_spec") and not creative.get("object_story_id")
+                and any(w in str(out).lower() for w in ("post", "story", "object_story"))):
             # Meta wouldn't accept the effective post id; fall back to the spec (new post).
             spec = build_new_creative(creative, reuse_post=False)
             post_kept = False
@@ -191,6 +208,9 @@ def run_catalog_off(config: Config, ad_ids: list[str] | None = None, limit: int 
             continue
         after = (_fetch_ad(config, ad_id).get("creative") or {})
         verified = str(after.get("id")) == new_id and _is_off(after)
+        newly_on = sorted(_opted_in(after) - _opted_in(creative))
+        if newly_on:
+            note += f" — NOTE enhancements now on that weren't before: {', '.join(newly_on)}"
         results.append(make("changed" if verified else "failed",
                             (f"verified: {turning_off} off, " + ("same post" if post_kept else "NEW post") + note) if verified else
                             f"ad switched but re-read shows creative {after.get('id')} with {_features_on(after)} still on",
