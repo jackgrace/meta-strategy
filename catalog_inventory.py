@@ -198,3 +198,36 @@ def send_catalog_summary(summary: dict, account_id: str, config: Config) -> bool
     except requests.RequestException as e:
         logger.error(f"Failed to send catalog summary: {e}")
         return False
+
+
+def _find_matches(obj, path="", out=None) -> list[str]:
+    """JSON paths where a key or string value mentions catalog / product_set."""
+    out = [] if out is None else out
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            p = f"{path}.{k}" if path else k
+            if "catalog" in k.lower() or "product_set" in k.lower():
+                out.append(f"{p} = {json.dumps(v)[:200]}")
+            _find_matches(v, p, out)
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            _find_matches(v, f"{path}[{i}]", out)
+    elif isinstance(obj, str) and ("catalog" in obj.lower() or "product_set" in obj.lower()):
+        out.append(f"{path} = {obj[:200]}")
+    return out
+
+
+def dump_creative(config: Config, ad_id: str) -> dict:
+    """Read only: one ad's full creative plus the paths that look catalog-related."""
+    data = _http_get_json(config, f"{API_BASE}/{ad_id}", {
+        "access_token": config.meta_access_token,
+        "fields": f"id,name,creative{{{CREATIVE_FIELDS},degrees_of_freedom_spec,template_url_spec,url_tags}}",
+    })
+    creative = data.get("creative") or {}
+    return {
+        "ad_id": data.get("id"),
+        "ad_name": data.get("name"),
+        "catalog_signal": _catalog_signal(creative),
+        "matches": _find_matches(creative),
+        "creative": creative,
+    }

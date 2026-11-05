@@ -46,7 +46,7 @@ from testing_ad_rules import (
 from disaster_stop import run_disaster_stop as _run_disaster_stop, run_disaster_midnight as _run_disaster_midnight, send_disaster_report
 from testing_cleanup import run_testing_cleanup as _run_testing_cleanup, send_testing_cleanup_report
 from cap_report import build_cap_report, send_cap_report
-from catalog_inventory import build_catalog_inventory, summarise as _catalog_summarise, to_csv as _catalog_csv, send_catalog_summary
+from catalog_inventory import build_catalog_inventory, dump_creative as _dump_creative, summarise as _catalog_summarise, to_csv as _catalog_csv, send_catalog_summary
 from adset_roas_restart import run_adset_roas_restart as _run_adset_roas_restart, send_adset_roas_restart_report
 from slack_reporter import send_testing_missed_opps, send_early_fatigue_report
 
@@ -360,6 +360,11 @@ def run_catalog_inventory(slack: bool = True) -> dict:
                             "ads": [r.__dict__ for r in rows if r.catalog_signal],
                             "csv": _catalog_csv(rows)})
     return {"status": "ok", "mode": "READ ONLY", "per_account": per_account}
+
+
+def run_creative_dump(ad_id: str) -> dict:
+    """Read only: show one ad's creative and what looks catalog-related in it."""
+    return _dump_creative(_per_account_configs()[0], ad_id)
 
 
 def run_midnight_restart_preview() -> dict:

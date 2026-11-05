@@ -41,6 +41,7 @@ from main import (
     run_adset_roas_restart,
     run_midnight_restart_preview,
     run_catalog_inventory,
+    run_creative_dump,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,16 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._run_testing_cleanup_endpoint(source="http")
         elif self.path == "/cap-report":
             self._run_cap_report_endpoint(source="http")
+        elif self.path.startswith("/creative-dump"):
+            ad_id = parse_qs(urlparse(self.path).query).get("ad", [""])[0].strip()
+            if not ad_id.isdigit():
+                self._respond(400, {"status": "error", "message": "use /creative-dump?ad=<ad id>"})
+            else:
+                try:
+                    self._respond(200, run_creative_dump(ad_id))
+                except Exception as e:
+                    logger.error(f"Creative dump failed: {e}")
+                    self._respond(500, {"status": "error", "message": str(e)})
         elif self.path.startswith("/catalog-ads"):
             try:
                 result = run_catalog_inventory(slack="format=csv" not in self.path)
