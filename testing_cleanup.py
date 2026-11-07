@@ -6,7 +6,7 @@ more than 7 days ago, over the last 7 complete days (same as Ads Manager's
 "Last 7 days", today excluded):
 
   1. 7d spend > $175 & 7d ROAS < 1.0  -> pause + rename "<name> - OFF LOW ROAS"
-  2. 7d spend < $10, and the ad's adset spent >= $150 in those 7 days
+  2. 7d spend < $5, and the ad's adset spent >= $150 in those 7 days
                                        -> pause + rename "<name> - OFF LOW SPEND"
      (an ad in a small-budget adset is starved, not rejected — left alone)
 
@@ -46,7 +46,7 @@ MIN_AD_AGE_DAYS = 7
 LOW_ROAS_ENABLED = False      # OFF LOW ROAS paused; OFF LOW SPEND still runs
 LOW_ROAS_SPEND = 175.0
 LOW_ROAS = 1.0
-LOW_SPEND = 10.0
+LOW_SPEND = 5.0
 LOW_SPEND_MIN_ADSET_SPEND = 150.0   # adset must have had real budget to compete for
 ALL_LOW_ROAS_ENABLED = True   # any campaign, ad > 7 days old
 ALL_LOW_ROAS_SPEND = 150.0
