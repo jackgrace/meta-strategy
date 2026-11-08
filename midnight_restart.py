@@ -37,6 +37,8 @@ MIN_YESTERDAY_CAMPAIGN_SPEND = 1.0            # adset rule
 MIN_YESTERDAY_CAMPAIGN_SPEND_ADS = 5.0        # ad rule
 # Paused ads in TESTING campaigns stay paused (adset-level restart unaffected).
 MIDNIGHT_SKIP_TESTING_ADS = True
+# Ad-level midnight restart switched off: midnight only wakes adsets.
+AD_RESTART_ENABLED = False
 # Paused adsets in TESTING campaigns stay paused too (OFF in name or not).
 MIDNIGHT_SKIP_TESTING_ADSETS = True
 
@@ -496,6 +498,9 @@ def _run_ad_level_midnight(config: Config, campaign_spend: dict, dry_run: bool) 
     - Ad currently PAUSED
     - Campaign name does NOT contain TESTING (MIDNIGHT_SKIP_TESTING_ADS)
     """
+    if not AD_RESTART_ENABLED:
+        logger.info("AD midnight: DISABLED — paused ads stay paused")
+        return []
     # Any campaign that spent yesterday qualifies — no keyword filter.
     qualifying_ids = {
         cid for cid, cdata in campaign_spend.items()
