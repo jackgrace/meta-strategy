@@ -7,8 +7,11 @@ Turn a PAUSED adset back ON during the day when:
 - its campaign is not a TESTING campaign (paused testing adsets stay off)
 - today it has spent > $50 and its ROAS today is > 1.1
 
-(Every other paused adset in an active campaign comes back at the midnight
-restart anyway.)
+Leaves alone any adset the intraday adset stop-loss would still pause
+(spend over its threshold with ROAS under its threshold), so the two rules
+can't flip an adset on and off; the stop-loss restarts those itself once
+ROAS recovers. Every other paused adset in an active campaign comes back at
+the midnight restart anyway.
 """
 
 import logging
@@ -20,7 +23,9 @@ import requests
 from config import Config
 from meta_api import fetch_adset_statuses
 from midnight_restart import _activate_adset, _fetch_campaign_statuses
-from stop_loss import _fetch_today_metrics
+from stop_loss import (_fetch_today_metrics, _is_cbo_campaign, _is_testing_campaign,
+                       SCALE_ADSET_ENABLED, SCALE_ADSET_SPEND_THRESHOLD, SCALE_ADSET_ROAS_THRESHOLD,
+                       CBO_ADSET_ENABLED, CBO_ADSET_SPEND_THRESHOLD, CBO_ADSET_ROAS_THRESHOLD)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +43,13 @@ class AdsetRestart:
     roas: float
     action: str   # would_activate | activated | failed
     reason: str
+
+
+def _stop_loss_would_pause(campaign_name: str, spend: float, roas: float) -> bool:
+    """True when the intraday adset stop-loss would pause this adset right now."""
+    if _is_cbo_campaign(campaign_name):
+        return CBO_ADSET_ENABLED and spend > CBO_ADSET_SPEND_THRESHOLD and roas < CBO_ADSET_ROAS_THRESHOLD
+    return SCALE_ADSET_ENABLED and spend > SCALE_ADSET_SPEND_THRESHOLD and roas < SCALE_ADSET_ROAS_THRESHOLD
 
 
 def run_adset_roas_restart(config: Config, dry_run: bool = False) -> list[AdsetRestart]:
@@ -74,8 +86,11 @@ def run_adset_roas_restart(config: Config, dry_run: bool = False) -> list[AdsetR
     for aid, t in paused.items():
         if campaigns.get(t["campaign_id"], {}).get("effective_status") != "ACTIVE":
             continue
-        if "TESTING" in t["campaign_name"].upper():
+        if _is_testing_campaign(t["campaign_name"]):
             continue  # paused TESTING adsets stay paused
+        roas = t["revenue"] / t["spend"]
+        if _stop_loss_would_pause(t["campaign_name"], t["spend"], roas):
+            continue  # the adset stop-loss still applies — it restarts it when ROAS recovers
         roas = t["revenue"] / t["spend"]
         name = info.get(aid, {}).get("name", t["name"])
         why = f"today ${t['spend']:.2f} at {roas:.2f}x > {RESTART_ROAS}"

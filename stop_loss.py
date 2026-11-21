@@ -79,14 +79,16 @@ STOP_CPA_ATC_THRESHOLD = 10.0  # cost per ATC above this — expensive ATCs = pa
 
 RESTART_ROAS_THRESHOLD = 1.6
 
-# SCALE — adset-level rule (today's metrics).
-#   Pause:   ACTIVE + spend > $1000 & ROAS < 0.8
-#   Restart: PAUSED + spend > $1000 & ROAS >= 0.8
-# Matches campaigns whose name contains SCALE as a whole word only.
+# Adset-level stop-loss, every active campaign except TESTING (today's metrics).
+#   Pause:   ACTIVE + spend > $500 & ROAS < 1.2
+#   Restart: PAUSED + spend > $500 & ROAS >= 1.2 (recovered); otherwise the
+#            midnight restart brings it back, unless the adset name has OFF.
+# Non-CBO campaigns use these constants; CBO campaigns use the CBO_* ones
+# below (same numbers, kept separate so they can be tuned apart).
 # Flip SCALE_ADSET_ENABLED to False to pause the rule without deleting it.
 SCALE_ADSET_ENABLED = True
-SCALE_ADSET_SPEND_THRESHOLD = 1000.0
-SCALE_ADSET_ROAS_THRESHOLD = 0.8
+SCALE_ADSET_SPEND_THRESHOLD = 500.0
+SCALE_ADSET_ROAS_THRESHOLD = 1.2
 
 # TESTING campaigns — adset-level rule (today's metrics).
 #   Early kill: spend > $50 & (no funnel events OR cost/event > $12)
@@ -140,12 +142,12 @@ TESTING_AD_ROAS_THRESHOLD_7D = 1.6
 TESTING_AD_CHEAP_ATC_PROTECT = 6.0
 
 # CBO campaigns — adset-level rule (today's metrics).
-#   Pause:   ACTIVE + spend > $1000 & ROAS < 0.8
-#   Restart: PAUSED + spend > $1000 & ROAS >= 0.8
+#   Pause:   ACTIVE + spend > $500 & ROAS < 1.2
+#   Restart: PAUSED + spend > $500 & ROAS >= 1.2
 # Flip CBO_ADSET_ENABLED to False to pause the rule without deleting it.
 CBO_ADSET_ENABLED = True
-CBO_ADSET_SPEND_THRESHOLD = 1000.0
-CBO_ADSET_ROAS_THRESHOLD = 0.8
+CBO_ADSET_SPEND_THRESHOLD = 500.0
+CBO_ADSET_ROAS_THRESHOLD = 1.2
 
 # CBO ad-level rules (today's metrics), keyed by adset-name keyword.
 # Only ads whose parent adset name contains one of these keywords are
@@ -671,9 +673,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                     "adset_name": ad["adset_name"],
                     "campaign_name": campaign_name,
                 }
-        elif SCALE_ADSET_ENABLED and (_is_scale_campaign(campaign_name)
-                                      or _is_winners(campaign_name)
-                                      or _is_winners(ad["adset_name"])):
+        elif SCALE_ADSET_ENABLED and not _is_testing_campaign(campaign_name):
             scale_adset_ids.add(ad["adset_id"])
             adset_meta[ad["adset_id"]] = {
                 "adset_name": ad["adset_name"],
@@ -709,7 +709,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         if ad["adset_id"]:
             adset_purchases[ad["adset_id"]] += ad["purchases"]
 
-    # === SCALE adset-level stop-loss / restart (today's metrics) ===
+    # === Adset-level stop-loss / restart, non-CBO campaigns (today's metrics) ===
     # Single rule:
     #   Pause:   ACTIVE + spend > $1000 & ROAS < 0.8
     #   Restart: PAUSED + spend > $1000 & ROAS >= 0.8
@@ -762,7 +762,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART: PAUSED + spend > $1000 & ROAS >= 0.8
+        # RESTART: PAUSED + spend > threshold & ROAS >= threshold (recovered)
         if (status == "PAUSED"
             and spend > SCALE_ADSET_SPEND_THRESHOLD
             and not fail):
@@ -1158,7 +1158,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
             ))
             continue
 
-        # RESTART: PAUSED + spend > $1000 & ROAS >= 0.8
+        # RESTART: PAUSED + spend > threshold & ROAS >= threshold (recovered)
         if (status == "PAUSED"
             and spend > CBO_ADSET_SPEND_THRESHOLD
             and not why):
