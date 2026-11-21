@@ -29,7 +29,7 @@ from stop_loss import (_fetch_today_metrics, _is_cbo_campaign, _is_testing_campa
 
 logger = logging.getLogger(__name__)
 
-ADSET_ROAS_RESTART_ENABLED = True
+ADSET_ROAS_RESTART_ENABLED = False   # off — the adset stop-loss handles its own recovery restart
 RESTART_ROAS = 1.1
 MIN_SPEND_TODAY = 50.0
 
