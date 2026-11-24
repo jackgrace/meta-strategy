@@ -86,7 +86,7 @@ RESTART_ROAS_THRESHOLD = 1.6
 # Non-CBO campaigns use these constants; CBO campaigns use the CBO_* ones
 # below (same numbers, kept separate so they can be tuned apart).
 # Flip SCALE_ADSET_ENABLED to False to pause the rule without deleting it.
-SCALE_ADSET_ENABLED = True
+SCALE_ADSET_ENABLED = False
 SCALE_ADSET_SPEND_THRESHOLD = 500.0
 SCALE_ADSET_ROAS_THRESHOLD = 1.0
 
@@ -145,7 +145,7 @@ TESTING_AD_CHEAP_ATC_PROTECT = 6.0
 #   Pause:   ACTIVE + spend > $500 & ROAS < 1.0
 #   Restart: PAUSED + spend > $500 & ROAS >= 1.0
 # Flip CBO_ADSET_ENABLED to False to pause the rule without deleting it.
-CBO_ADSET_ENABLED = True
+CBO_ADSET_ENABLED = False
 CBO_ADSET_SPEND_THRESHOLD = 500.0
 CBO_ADSET_ROAS_THRESHOLD = 1.0
 
