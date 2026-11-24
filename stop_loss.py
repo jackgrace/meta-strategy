@@ -80,14 +80,14 @@ STOP_CPA_ATC_THRESHOLD = 10.0  # cost per ATC above this — expensive ATCs = pa
 RESTART_ROAS_THRESHOLD = 1.6
 
 # Adset-level stop-loss, every active campaign except TESTING (today's metrics).
-#   Pause:   ACTIVE + spend > $300 & ROAS < 1.0
-#   Restart: PAUSED + spend > $300 & ROAS >= 1.0 (recovered); otherwise the
+#   Pause:   ACTIVE + spend > $500 & ROAS < 1.0
+#   Restart: PAUSED + spend > $500 & ROAS >= 1.0 (recovered); otherwise the
 #            midnight restart brings it back, unless the adset name has OFF.
 # Non-CBO campaigns use these constants; CBO campaigns use the CBO_* ones
 # below (same numbers, kept separate so they can be tuned apart).
 # Flip SCALE_ADSET_ENABLED to False to pause the rule without deleting it.
 SCALE_ADSET_ENABLED = True
-SCALE_ADSET_SPEND_THRESHOLD = 300.0
+SCALE_ADSET_SPEND_THRESHOLD = 500.0
 SCALE_ADSET_ROAS_THRESHOLD = 1.0
 
 # TESTING campaigns — adset-level rule (today's metrics).
@@ -142,11 +142,11 @@ TESTING_AD_ROAS_THRESHOLD_7D = 1.6
 TESTING_AD_CHEAP_ATC_PROTECT = 6.0
 
 # CBO campaigns — adset-level rule (today's metrics).
-#   Pause:   ACTIVE + spend > $300 & ROAS < 1.0
-#   Restart: PAUSED + spend > $300 & ROAS >= 1.0
+#   Pause:   ACTIVE + spend > $500 & ROAS < 1.0
+#   Restart: PAUSED + spend > $500 & ROAS >= 1.0
 # Flip CBO_ADSET_ENABLED to False to pause the rule without deleting it.
 CBO_ADSET_ENABLED = True
-CBO_ADSET_SPEND_THRESHOLD = 300.0
+CBO_ADSET_SPEND_THRESHOLD = 500.0
 CBO_ADSET_ROAS_THRESHOLD = 1.0
 
 # CBO ad-level rules (today's metrics), keyed by adset-name keyword.
