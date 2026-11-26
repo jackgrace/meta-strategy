@@ -89,6 +89,13 @@ RESTART_ROAS_THRESHOLD = 1.6
 SCALE_ADSET_ENABLED = True
 SCALE_ADSET_SPEND_THRESHOLD = 300.0
 SCALE_ADSET_ROAS_THRESHOLD = 1.0
+# TESTING campaigns get the same rule with their own spend bar.
+#   Pause:   ACTIVE + spend > $200 & ROAS < 1.0;  Restart: recovered to 1.0.
+# (Midnight never restarts TESTING adsets, so a paused one only comes back
+#  the same day if ROAS recovers, or by hand.)
+TESTING_ADSET_STOP_ENABLED = True
+TESTING_ADSET_STOP_SPEND_THRESHOLD = 200.0
+TESTING_ADSET_STOP_ROAS_THRESHOLD = 1.0
 
 # TESTING campaigns — adset-level rule (today's metrics).
 #   Early kill: spend > $50 & (no funnel events OR cost/event > $12)
@@ -673,7 +680,8 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
                     "adset_name": ad["adset_name"],
                     "campaign_name": campaign_name,
                 }
-        elif SCALE_ADSET_ENABLED and not _is_testing_campaign(campaign_name):
+        elif ((SCALE_ADSET_ENABLED and not _is_testing_campaign(campaign_name))
+              or (TESTING_ADSET_STOP_ENABLED and _is_testing_campaign(campaign_name))):
             scale_adset_ids.add(ad["adset_id"])
             adset_meta[ad["adset_id"]] = {
                 "adset_name": ad["adset_name"],
@@ -731,7 +739,11 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         if "OFF" in current_name.upper() or "RUN" in current_name.upper():
             continue
 
-        fail = _adset_roas_fail(spend, roas, SCALE_ADSET_SPEND_THRESHOLD, SCALE_ADSET_ROAS_THRESHOLD)
+        if _is_testing_campaign(adset_meta[adset_id]["campaign_name"]):
+            spend_t, roas_t = TESTING_ADSET_STOP_SPEND_THRESHOLD, TESTING_ADSET_STOP_ROAS_THRESHOLD
+        else:
+            spend_t, roas_t = SCALE_ADSET_SPEND_THRESHOLD, SCALE_ADSET_ROAS_THRESHOLD
+        fail = _adset_roas_fail(spend, roas, spend_t, roas_t)
 
         # STOP: spend > $1000 & ROAS < 0.8
         if status == "ACTIVE" and fail:
@@ -764,7 +776,7 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
 
         # RESTART: PAUSED + spend > threshold & ROAS >= threshold (recovered)
         if (status == "PAUSED"
-            and spend > SCALE_ADSET_SPEND_THRESHOLD
+            and spend > spend_t
             and not fail):
 
             if dry_run:
