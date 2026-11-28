@@ -48,10 +48,10 @@ class AdsetRestart:
 
 def _stop_loss_would_pause(campaign_name: str, spend: float, roas: float) -> bool:
     """True when the intraday adset stop-loss would pause this adset right now."""
-    if _is_cbo_campaign(campaign_name):
-        return CBO_ADSET_ENABLED and spend > CBO_ADSET_SPEND_THRESHOLD and roas < CBO_ADSET_ROAS_THRESHOLD
     if _is_testing_campaign(campaign_name):
         return TESTING_ADSET_STOP_ENABLED and spend > TESTING_ADSET_STOP_SPEND_THRESHOLD and roas < TESTING_ADSET_STOP_ROAS_THRESHOLD
+    if _is_cbo_campaign(campaign_name):
+        return CBO_ADSET_ENABLED and spend > CBO_ADSET_SPEND_THRESHOLD and roas < CBO_ADSET_ROAS_THRESHOLD
     return SCALE_ADSET_ENABLED and spend > SCALE_ADSET_SPEND_THRESHOLD and roas < SCALE_ADSET_ROAS_THRESHOLD
 
 

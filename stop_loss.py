@@ -148,12 +148,13 @@ TESTING_AD_ROAS_THRESHOLD_7D = 1.6
 # signal that we let ASC keep testing conversion at its own pace.
 TESTING_AD_CHEAP_ATC_PROTECT = 6.0
 
-# CBO campaigns — adset-level rule (today's metrics).
-#   Pause:   ACTIVE + spend > $300 & ROAS < 1.0
-#   Restart: PAUSED + spend > $300 & ROAS >= 1.0
+# CBO campaigns — adset-level rule (today's metrics). TESTING campaigns use
+# the TESTING rule even when their name also contains CBO.
+#   Pause:   ACTIVE + spend > $500 & ROAS < 1.0
+#   Restart: PAUSED + spend > $500 & ROAS >= 1.0
 # Flip CBO_ADSET_ENABLED to False to pause the rule without deleting it.
-CBO_ADSET_ENABLED = False
-CBO_ADSET_SPEND_THRESHOLD = 300.0
+CBO_ADSET_ENABLED = True
+CBO_ADSET_SPEND_THRESHOLD = 500.0
 CBO_ADSET_ROAS_THRESHOLD = 1.0
 
 # CBO ad-level rules (today's metrics), keyed by adset-name keyword.
@@ -671,17 +672,24 @@ def run_stop_loss(config: Config, dry_run: bool = False) -> tuple[list[StopLossA
         if not ad["adset_id"]:
             continue
         campaign_name = ad["campaign_name"]
-        # CBO campaigns never fall through to the SCALE rule, even when the
-        # CBO rule is off ("SCALE | CBO | ..." stays unmanaged at adset level).
-        if _is_cbo_campaign(campaign_name):
+        # TESTING first: "CBO | WW | Testing" is a testing campaign, not a CBO one.
+        # Other CBO campaigns never fall through to the SCALE rule, even when
+        # the CBO rule is off ("SCALE | CBO | ..." stays unmanaged at adset level).
+        if _is_testing_campaign(campaign_name):
+            if TESTING_ADSET_STOP_ENABLED:
+                scale_adset_ids.add(ad["adset_id"])
+                adset_meta[ad["adset_id"]] = {
+                    "adset_name": ad["adset_name"],
+                    "campaign_name": campaign_name,
+                }
+        elif _is_cbo_campaign(campaign_name):
             if CBO_ADSET_ENABLED:
                 cbo_adset_ids.add(ad["adset_id"])
                 adset_meta[ad["adset_id"]] = {
                     "adset_name": ad["adset_name"],
                     "campaign_name": campaign_name,
                 }
-        elif ((SCALE_ADSET_ENABLED and not _is_testing_campaign(campaign_name))
-              or (TESTING_ADSET_STOP_ENABLED and _is_testing_campaign(campaign_name))):
+        elif SCALE_ADSET_ENABLED:
             scale_adset_ids.add(ad["adset_id"])
             adset_meta[ad["adset_id"]] = {
                 "adset_name": ad["adset_name"],
